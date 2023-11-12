@@ -1,6 +1,6 @@
-use std::str;
+use std::io::{BufRead, BufReader};
+use std::time::Duration;
 use std::{
-    io::Read,
     process::{Child, ChildStdout, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -17,102 +17,112 @@ pub fn action_thread(
 ) {
     let event_tx_clone = event_tx.clone();
     let action_tx_clone = action_tx.clone();
-    loop {
-        match action_rx.try_recv() {
-            Ok(event) => match event {
-                TUIAction::LogIn => {
-                    let event_tx_clone = event_tx_clone.clone();
-                    let action_tx_clone = action_tx_clone.clone();
-                    thread::spawn(move || {
-                        let output = Command::new("sh")
-                            .arg("-C")
-                            .arg("./aws_sso_mock.sh")
-                            // .arg("sso")
-                            // .arg("login")
-                            // .arg("--profile")
-                            // .arg("eks-non-prod-myccv-lab-developer")
-                            .stdout(Stdio::piped())
-                            .stderr(Stdio::null())
-                            .spawn()
-                            .expect("fail");
-                        read_stdout_check_and_send(
-                            output,
-                            event_tx_clone.clone(),
-                            action_tx_clone.clone(),
-                            check_login_status,
-                            add_login_logs,
-                        )
-                    });
-                }
-                TUIAction::GetLogs => {
-                    let event_tx_clone = event_tx_clone.clone();
-                    thread::spawn(move || {
-                        // Command::new("aws")
-                        //     .arg("eks")
-                        //     .arg("--profile")
-                        //     .arg("eks-non-prod-myccv-lab-developer")
-                        //     .arg("update-kubeconfig")
-                        //     .arg("--name")
-                        //     .arg("shared-non-prod-2")
-                        //     .stdout(Stdio::piped())
-                        //     .stderr(Stdio::null())
-                        //     .spawn()
-                        //     .expect("fail");
-                        // let child = Command::new("kubectl")
-                        //     .arg("logs")
-                        //     .arg("-n")
-                        //     .arg("myccv-dev-salespoint")
-                        //     .arg("-l")
-                        //     .arg("component=salespoint-v2")
-                        //     .arg("-c")
-                        //     .arg("salespoint-v2")
-                        //     .arg("-f")
-                        //     .arg("--prefix=true")
-                        //     .stdout(Stdio::piped())
-                        //     .stderr(Stdio::null())
-                        //     .spawn()
-                        //     .expect("fail");
-                        let child = Command::new("cat")
-                            .arg("src/main.rs")
-                            .stdout(Stdio::piped())
-                            .stderr(Stdio::null())
-                            .spawn()
-                            .expect("fail");
-                        read_stdout_and_send(child, event_tx_clone, add_logs)
-                    });
-                }
-            },
-            Err(_) => {}
+    while let Ok(event) = action_rx.recv() {
+        match event {
+            TUIAction::LogIn => {
+                let event_tx_clone = event_tx_clone.clone();
+                let action_tx_clone = action_tx_clone.clone();
+                thread::spawn(move || {
+                    // let output = Command::new("sh")
+                    // .arg("-C")
+                    // .arg("./aws_sso_mock.sh")
+                    let output = Command::new("aws")
+                        .arg("sso")
+                        .arg("login")
+                        .arg("--profile")
+                        .arg("eks-non-prod-myccv-lab-developer")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .expect("fail");
+                    read_stdout_check_and_send(
+                        output,
+                        event_tx_clone.clone(),
+                        action_tx_clone.clone(),
+                        check_login_status,
+                        add_login_logs,
+                    )
+                });
+            }
+            TUIAction::GetLogs => {
+                let action_tx_clone = action_tx.clone();
+                let event_tx_clone = event_tx_clone.clone();
+                thread::spawn(move || {
+                    Command::new("aws")
+                        .arg("eks")
+                        .arg("--profile")
+                        .arg("eks-non-prod-myccv-lab-developer")
+                        .arg("update-kubeconfig")
+                        .arg("--name")
+                        .arg("shared-non-prod-2")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .expect("fail");
+                    if let Ok(output) = Command::new("kubectl")
+                        .arg("logs")
+                        .arg("-n")
+                        .arg("myccv-dev-salespoint")
+                        .arg("-l")
+                        .arg("component=salespoint-v2")
+                        .arg("-c")
+                        .arg("salespoint-v2")
+                        .arg("-f")
+                        .arg("--prefix=true")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()
+                    {
+                        event_tx_clone.clone().send(TUIEvent::IsLoggedIn).unwrap();
+                        read_stdout_and_send(output, event_tx_clone, add_logs)
+                    } else {
+                        action_tx_clone.clone().send(TUIAction::LogIn).unwrap()
+                    }
+                    // let child = Command::new("cat")
+                    //     .arg("src/main.rs")
+                    //     .stdout(Stdio::piped())
+                    //     .stderr(Stdio::null())
+                    //     .spawn()
+                    //     .expect("fail");
+                });
+            }
         }
     }
 }
-fn get_log_iterator(mut stdout: ChildStdout) -> Receiver<String> {
+
+fn split_on_new_line(line: String) -> (Option<Vec<String>>, Option<String>) {
+    if let Some((first, last)) = line.rsplit_once("\n") {
+        let split_line: Vec<String> = first.split("\n").map(|l| l.to_string() + "\n").collect();
+        (Some(split_line), Some(last.to_string()))
+    } else {
+        (None, None)
+    }
+}
+
+fn get_log_iterator(stdout: ChildStdout) -> Receiver<String> {
     let (read_tx, read_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
     thread::spawn(move || {
-        let mut buf = [1; 1];
+        let mut buf_reader = BufReader::new(stdout);
 
+        let mut line_construct = String::new();
         loop {
-            let mut line: Option<String> = None;
-            let mut line_construct = String::new();
-            while let None = line {
-                match stdout.read_exact(&mut buf) {
-                    Ok(_) => (),
-                    Err(_) => (),
-                }
-                if let Ok(text_in_buf) = str::from_utf8(&buf) {
-                    let mut line_check = line_construct.to_string();
-                    line_check.push_str(&text_in_buf);
-                    if line_check.ends_with("\n") && !line_check.chars().all(|c| c == '\n') {
-                        line = Some(line_check.clone().to_string());
-                    } else {
-                        line_construct = line_check.clone();
+            let mut text_in_buf = String::new();
+            if let Ok(0) = buf_reader.read_line(&mut text_in_buf) {
+                thread::sleep(Duration::from_secs(2))
+            } else {
+                let mut line_check = line_construct.to_string();
+                line_check.push_str(&text_in_buf);
+                let splits = split_on_new_line(line_check.clone());
+                if let (Some(new_lines), Some(rest)) = splits.clone() {
+                    line_construct = rest.clone();
+                    for nline in new_lines {
+                        read_tx.send(nline).unwrap();
                     }
                 } else {
-                    line = None;
-                };
+                    line_construct = line_check;
+                }
             }
-            let line = line.unwrap();
-            read_tx.send(line.clone()).unwrap();
+            thread::sleep(Duration::from_millis(5));
         }
     });
     read_rx
@@ -127,7 +137,7 @@ fn read_stdout_check_and_send(
 ) {
     let rx = get_log_iterator(child.stdout.unwrap());
     loop {
-        if let Ok(line) = rx.try_recv() {
+        if let Ok(line) = rx.recv() {
             check(line.clone(), event_tx.clone(), action_tx.clone());
             send(event_tx.clone(), line.clone())
         }
@@ -141,7 +151,7 @@ fn read_stdout_and_send(
 ) {
     let rx = get_log_iterator(child.stdout.unwrap());
     loop {
-        if let Ok(line) = rx.try_recv() {
+        if let Ok(line) = rx.recv() {
             send(event_tx.clone(), line.clone())
         }
     }

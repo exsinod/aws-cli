@@ -2,7 +2,7 @@ mod action_thread;
 mod event_thread;
 mod ui;
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -21,6 +21,7 @@ use std::{
 
 #[derive(Clone)]
 pub struct Store {
+    pub error: Option<String>,
     pub logged_in: bool,
     pub login_code: Option<String>,
     pub login_log: Option<String>,
@@ -30,6 +31,7 @@ pub struct Store {
 impl Store {
     fn new() -> Store {
         Store {
+            error: None,
             logged_in: false,
             login_code: None,
             login_log: None,
@@ -39,6 +41,7 @@ impl Store {
 }
 
 pub enum TUIEvent {
+    NeedsLogin,
     DisplayLoginCode(String),
     IsLoggedIn,
     AddLoginLog(String),
@@ -48,6 +51,11 @@ pub enum TUIEvent {
 pub enum TUIAction {
     LogIn,
     GetLogs,
+}
+
+enum UserInput {
+    Quit,
+    Pauze,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -62,21 +70,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
 
+    // clone to move in to event thread
+    let action_tx_clone = action_tx.clone();
+
     // event thread
     thread::spawn(move || {
-        event_thread::event_thread(event_rx, store_tx);
+        event_thread::event_thread(event_rx, store_tx, action_tx_clone);
     });
-
-    // clone to send action after moving action_tx in thread
-    let action_tx_clone = action_tx.clone();
 
     // action thread
     thread::spawn(move || {
         action_thread::action_thread(event_tx, action_rx, action_tx);
     });
-
-    // initialize store
-    action_tx_clone.send(TUIAction::LogIn).unwrap();
 
     // create app and run it
     let res = run_app(&mut terminal, &store_rx);
@@ -98,16 +103,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, store_rx: &Receiver<Store>) -> io::Result<()> {
-    loop {
-        terminal.draw(|f| ui::ui(f, store_rx))?;
-
-        if poll(Duration::from_millis(5))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break Ok(()),
-                    _ => {}
-                }
+    let (user_input_tx, user_input_rx): (Sender<UserInput>, Receiver<UserInput>) = mpsc::channel();
+    thread::spawn(move || {
+        while let Event::Key(key) = event::read().unwrap() {
+            match key.code {
+                KeyCode::Char('q') => user_input_tx.send(UserInput::Quit).unwrap(),
+                _ => {}
             }
         }
+    });
+    let mut should_quit = false;
+    while let false = should_quit {
+        if let Ok(input) = user_input_rx.try_recv() {
+            if let UserInput::Quit = input {
+                should_quit = true;
+            }
+        }
+        while let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(1)) {
+            terminal.draw(|f| ui::ui(f, updated_store)).unwrap();
+        }
     }
+    Ok(())
 }

@@ -1,36 +1,46 @@
-use std::{
-    sync::mpsc::{Receiver, Sender},
-    thread,
-    time::Duration,
-};
+use std::sync::mpsc::{Receiver, Sender};
 
-use crate::{Store, TUIEvent};
+use crate::{Store, TUIAction, TUIEvent};
 
-pub fn event_thread(event_rx: Receiver<TUIEvent>, store_tx: Sender<Store>) {
+pub fn event_thread(
+    event_rx: Receiver<TUIEvent>,
+    store_tx: Sender<Store>,
+    action_tx: Sender<TUIAction>,
+) {
     let mut store = Store::new();
-    loop {
-        match event_rx.try_recv() {
-            Ok(event) => match event {
-                TUIEvent::IsLoggedIn => {
-                    store.logged_in = true;
-                }
-                TUIEvent::DisplayLoginCode(code) => {
-                    store.login_code = Some(code);
-                }
-                TUIEvent::AddLoginLog(log_part) => {
-                    add_to(&mut store.login_log, log_part);
-                }
-                TUIEvent::AddLog(log_part) => {
-                    add_to(&mut store.logs, log_part);
-                }
-            },
-            Err(_) => {}
+    action_tx.send(TUIAction::GetLogs).unwrap();
+    while let Ok(event) = event_rx.recv() {
+        match event {
+            TUIEvent::NeedsLogin => {
+                store.error = Some("Require login".to_string());
+                action_tx.send(TUIAction::LogIn).unwrap();
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::IsLoggedIn => {
+                store.error = None;
+                store.logged_in = true;
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::DisplayLoginCode(code) => {
+                store.login_code = Some(code);
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::AddLoginLog(log_part) => {
+                add_to(&mut store.login_log, log_part);
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::AddLog(log_part) => {
+                add_to(&mut store.logs, log_part);
+                send_store(store_tx.clone(), store.clone())
+            }
         }
-        match store_tx.send(store.clone()) {
-            Ok(_) => (),
-            Err(err) => println!("{}", err),
-        }
-        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn send_store(store_tx: Sender<Store>, store: Store) {
+    match store_tx.send(store.clone()) {
+        Ok(_) => (),
+        Err(err) => println!("{}", err),
     }
 }
 
