@@ -8,9 +8,13 @@ pub fn event_thread(
     action_tx: Sender<TUIAction>,
 ) {
     let mut store = Store::new();
-    action_tx.send(TUIAction::GetLogs).unwrap();
+    send_store(store_tx.clone(), store.clone());
     while let Ok(event) = event_rx.recv() {
         match event {
+            TUIEvent::Error(error) => {
+                store.error = Some(error);
+                send_store(store_tx.clone(), store.clone())
+            }
             TUIEvent::NeedsLogin => {
                 store.error = Some("Require login".to_string());
                 action_tx.send(TUIAction::LogIn).unwrap();
@@ -31,6 +35,10 @@ pub fn event_thread(
             }
             TUIEvent::AddLog(log_part) => {
                 add_to(&mut store.logs, log_part);
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::LogThreadStarted => {
+                store.log_thread_started = true;
                 send_store(store_tx.clone(), store.clone())
             }
         }

@@ -48,7 +48,7 @@ pub fn action_thread(
                 let action_tx_clone = action_tx.clone();
                 let event_tx_clone = event_tx_clone.clone();
                 thread::spawn(move || {
-                    Command::new("aws")
+                    if let Ok(mut child) = Command::new("aws")
                         .arg("eks")
                         .arg("--profile")
                         .arg("eks-non-prod-myccv-lab-developer")
@@ -58,25 +58,38 @@ pub fn action_thread(
                         .stdout(Stdio::piped())
                         .stderr(Stdio::null())
                         .spawn()
-                        .expect("fail");
-                    if let Ok(output) = Command::new("kubectl")
-                        .arg("logs")
-                        .arg("-n")
-                        .arg("myccv-dev-salespoint")
-                        .arg("-l")
-                        .arg("component=salespoint-v2")
-                        .arg("-c")
-                        .arg("salespoint-v2")
-                        .arg("-f")
-                        .arg("--prefix=true")
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::null())
-                        .spawn()
                     {
-                        event_tx_clone.clone().send(TUIEvent::IsLoggedIn).unwrap();
-                        read_stdout_and_send(output, event_tx_clone, add_logs)
-                    } else {
-                        action_tx_clone.clone().send(TUIAction::LogIn).unwrap()
+                        event_tx_clone.send(TUIEvent::LogThreadStarted).unwrap();
+                        if let Ok(status) = child.wait() {
+                            if status.success() {
+                                if let Ok(output) = Command::new("kubectl")
+                                    .arg("logs")
+                                    .arg("-n")
+                                    .arg("myccv-dev-salespoint")
+                                    .arg("-l")
+                                    .arg("component=salespoint-v2")
+                                    .arg("-c")
+                                    .arg("salespoint-v2")
+                                    .arg("-f")
+                                    .arg("--prefix=true")
+                                    .stdout(Stdio::piped())
+                                    .stderr(Stdio::null())
+                                    .spawn()
+                                {
+                                    read_stdout_and_send(
+                                        output,
+                                        event_tx_clone,
+                                        action_tx_clone,
+                                        on_error,
+                                        add_logs,
+                                    )
+                                } else {
+                                    action_tx_clone.clone().send(TUIAction::LogIn).unwrap()
+                                }
+                            } else {
+                                on_error(action_tx_clone.clone());
+                            }
+                        }
                     }
                     // let child = Command::new("cat")
                     //     .arg("src/main.rs")
@@ -88,6 +101,10 @@ pub fn action_thread(
             }
         }
     }
+}
+
+fn on_error(action_tx: Sender<TUIAction>) {
+    action_tx.send(TUIAction::LogIn).unwrap()
 }
 
 fn split_on_new_line(line: String) -> (Option<Vec<String>>, Option<String>) {
@@ -145,13 +162,23 @@ fn read_stdout_check_and_send(
 }
 
 fn read_stdout_and_send(
-    child: Child,
+    mut child: Child,
     event_tx: Sender<TUIEvent>,
+    action_tx: Sender<TUIAction>,
+    on_error: fn(action_tx: Sender<TUIAction>),
     send: fn(event_tx: Sender<TUIEvent>, line: String),
 ) {
-    let rx = get_log_iterator(child.stdout.unwrap());
+    let rx = get_log_iterator(child.stdout.take().unwrap());
     loop {
-        if let Ok(line) = rx.recv() {
+        if let Ok(Some(status)) = child.try_wait() {
+            if !status.success() {
+                on_error(action_tx.clone());
+            }
+            break;
+        }
+
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(50)) {
+            event_tx.clone().send(TUIEvent::IsLoggedIn).unwrap();
             send(event_tx.clone(), line.clone())
         }
     }

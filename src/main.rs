@@ -2,7 +2,7 @@ mod action_thread;
 mod event_thread;
 mod ui;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -26,6 +26,7 @@ pub struct Store {
     pub login_code: Option<String>,
     pub login_log: Option<String>,
     pub logs: Option<String>,
+    pub log_thread_started: bool,
 }
 
 impl Store {
@@ -36,15 +37,18 @@ impl Store {
             login_code: None,
             login_log: None,
             logs: None,
+            log_thread_started: false,
         }
     }
 }
 
 pub enum TUIEvent {
+    Error(String),
     NeedsLogin,
     DisplayLoginCode(String),
     IsLoggedIn,
     AddLoginLog(String),
+    LogThreadStarted,
     AddLog(String),
 }
 
@@ -62,7 +66,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -72,19 +76,23 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // clone to move in to event thread
     let action_tx_clone = action_tx.clone();
+    let event_tx_clone = event_tx.clone();
 
     // event thread
     thread::spawn(move || {
         event_thread::event_thread(event_rx, store_tx, action_tx_clone);
     });
 
+    // clone to move in to action thread
+    let action_tx_clone = action_tx.clone();
+
     // action thread
     thread::spawn(move || {
-        action_thread::action_thread(event_tx, action_rx, action_tx);
+        action_thread::action_thread(event_tx_clone.clone(), action_rx, action_tx_clone.clone());
     });
 
     // create app and run it
-    let res = run_app(&mut terminal, &store_rx);
+    let res = run_app(&mut terminal, store_rx, event_tx, action_tx);
 
     // restore terminal
     disable_raw_mode()?;
@@ -102,13 +110,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, store_rx: &Receiver<Store>) -> io::Result<()> {
+fn run_app<B: Backend>(
+    terminal: &mut Terminal<B>,
+    store_rx: Receiver<Store>,
+    event_tx: Sender<TUIEvent>,
+    action_tx: Sender<TUIAction>,
+) -> io::Result<()> {
     let (user_input_tx, user_input_rx): (Sender<UserInput>, Receiver<UserInput>) = mpsc::channel();
     thread::spawn(move || {
-        while let Event::Key(key) = event::read().unwrap() {
+        while let Ok(Event::Key(key)) = event::read() {
             match key.code {
                 KeyCode::Char('q') => user_input_tx.send(UserInput::Quit).unwrap(),
-                _ => {}
+                _ => event_tx
+                    .send(TUIEvent::Error(
+                        "Unrecognised key: ".to_string() + &format!("{:?}", key.code).to_string() + " Press q to quit",
+                    ))
+                    .unwrap(),
             }
         }
     });
@@ -120,7 +137,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, store_rx: &Receiver<Store>) -
             }
         }
         while let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(1)) {
-            terminal.draw(|f| ui::ui(f, updated_store)).unwrap();
+            terminal
+                .draw(|f| ui::ui(f, updated_store, action_tx.clone()))
+                .unwrap();
         }
     }
     Ok(())

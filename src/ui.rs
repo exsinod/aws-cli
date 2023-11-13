@@ -1,3 +1,5 @@
+use std::{rc::Rc, sync::mpsc::Sender};
+
 use ratatui::{
     prelude::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -6,9 +8,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::Store;
+use crate::{Store, TUIAction};
 
-pub fn ui(f: &mut Frame<'_>, store: Store) {
+pub fn ui(f: &mut Frame<'_>, store: Store, action_tx: Sender<TUIAction>) {
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Max(1), Constraint::Percentage(90)])
@@ -40,15 +42,7 @@ pub fn ui(f: &mut Frame<'_>, store: Store) {
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_layout[1]);
-        f.render_widget(
-            content_in_black(
-                "Salespoint V2 logs".to_string(),
-                store.clone().logs,
-                layout[0],
-            )
-            .unwrap_or_default(),
-            layout[0],
-        );
+        render_widget_and_call(f, store.clone(), action_tx.clone(), layout.clone());
         f.render_widget(
             content_in_white(
                 "Login script".to_string(),
@@ -57,6 +51,27 @@ pub fn ui(f: &mut Frame<'_>, store: Store) {
             )
             .unwrap_or_default(),
             layout[1],
+        );
+    }
+}
+
+fn render_widget_and_call(
+    f: &mut Frame,
+    store: Store,
+    action_tx: Sender<TUIAction>,
+    layout: Rc<[Rect]>,
+) {
+    if let false = store.log_thread_started {
+        action_tx.send(TUIAction::GetLogs).unwrap();
+    } else {
+        f.render_widget(
+            content_in_black(
+                "Salespoint V2 logs".to_string(),
+                store.clone().logs,
+                layout[0],
+            )
+            .unwrap_or_default(),
+            layout[0],
         );
     }
 }
