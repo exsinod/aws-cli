@@ -6,5 +6,4 @@ https://device.sso.eu-west-1.amazonaws.com/
 Then enter the code:
 
 MQBJ-XSZB"
-# sleep 4
 echo "Successfully"

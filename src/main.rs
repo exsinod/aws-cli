@@ -6,6 +6,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use log::{LevelFilter, debug};
+use log4rs::{append::file::FileAppender, Config, config::{Appender, Root}};
 use ratatui::{
     prelude::{Backend, CrosstermBackend},
     Terminal,
@@ -42,6 +44,7 @@ impl Store {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum TUIEvent {
     Error(String),
     NeedsLogin,
@@ -52,7 +55,9 @@ pub enum TUIEvent {
     AddLog(String),
 }
 
+#[derive(Debug, PartialEq)]
 pub enum TUIAction {
+    CheckConnectivity,
     LogIn,
     GetLogs,
 }
@@ -69,6 +74,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let stdout = FileAppender::builder().append(false).build("./logs.txt").unwrap();
+    let config = Config::builder()
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .build(Root::builder().appender("stdout").build(LevelFilter::Trace))
+        .unwrap();
+    let _handle = log4rs::init_config(config).unwrap();
+    debug!("Logging init");
 
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();

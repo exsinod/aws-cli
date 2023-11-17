@@ -28,21 +28,12 @@ pub fn ui(f: &mut Frame<'_>, store: Store, action_tx: Sender<TUIAction>) {
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Percentage(100)])
             .split(main_layout[1]);
-        f.render_widget(
-            content_in_black(
-                "Salespoint V2 logs".to_string(),
-                store.clone().logs,
-                layout[0],
-            )
-            .unwrap_or_default(),
-            layout[0],
-        );
+        render_widget_and_call(f, store.clone(), action_tx.clone(), layout.clone());
     } else {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_layout[1]);
-        render_widget_and_call(f, store.clone(), action_tx.clone(), layout.clone());
         f.render_widget(
             content_in_white(
                 "Login script".to_string(),

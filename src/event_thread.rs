@@ -1,5 +1,7 @@
 use std::sync::mpsc::{Receiver, Sender};
 
+use log::debug;
+
 use crate::{Store, TUIAction, TUIEvent};
 
 pub fn event_thread(
@@ -9,7 +11,9 @@ pub fn event_thread(
 ) {
     let mut store = Store::new();
     send_store(store_tx.clone(), store.clone());
+    action_tx.send(TUIAction::CheckConnectivity).unwrap();
     while let Ok(event) = event_rx.recv() {
+        debug!("handling event: {:?}", event);
         match event {
             TUIEvent::Error(error) => {
                 store.error = Some(error);
