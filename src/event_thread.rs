@@ -44,6 +44,14 @@ pub fn event_thread(
             TUIEvent::LogThreadStarted => {
                 store.log_thread_started = true;
                 send_store(store_tx.clone(), store.clone())
+            },
+            TUIEvent::LogThreadStopped => {
+                store.log_thread_started = false;
+                send_store(store_tx.clone(), store.clone())
+            },
+            TUIEvent::AddPods(pods) => {
+                store.pods = Some(pods);
+                send_store(store_tx.clone(), store.clone())
             }
         }
     }

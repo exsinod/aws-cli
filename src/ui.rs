@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::mpsc::Sender};
+use std::sync::mpsc::Sender;
 
 use ratatui::{
     prelude::{Alignment, Constraint, Direction, Layout, Rect},
@@ -26,9 +26,10 @@ pub fn ui(f: &mut Frame<'_>, store: Store, action_tx: Sender<TUIAction>) {
     if let true = store.logged_in {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(100)])
+            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_layout[1]);
-        render_widget_and_call(f, store.clone(), action_tx.clone(), layout.clone());
+        render_widget_and_call(f, store.clone(), store.clone().logs, action_tx.clone(), get_logs_action, layout[0]);
+        render_widget_and_call(f, store.clone(), store.pods, action_tx.clone(), get_pods_action, layout[1]);
     } else {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -49,22 +50,31 @@ pub fn ui(f: &mut Frame<'_>, store: Store, action_tx: Sender<TUIAction>) {
 fn render_widget_and_call(
     f: &mut Frame,
     store: Store,
+    data: Option<String>,
     action_tx: Sender<TUIAction>,
-    layout: Rc<[Rect]>,
+    do_action: fn(store: Store, action_thread: Sender<TUIAction>),
+    rect: Rect,
 ) {
-    if let false = store.log_thread_started {
-        action_tx.send(TUIAction::GetLogs).unwrap();
-    } else {
+        do_action(store.clone(), action_tx);
         f.render_widget(
             content_in_black(
                 "Salespoint V2 logs".to_string(),
-                store.clone().logs,
-                layout[0],
+                data,
+                rect,
             )
             .unwrap_or_default(),
-            layout[0],
+            rect,
         );
+}
+
+fn get_logs_action(store: Store, action_tx: Sender<TUIAction>) {
+    if let false = store.log_thread_started {
+        action_tx.send(TUIAction::GetLogs).unwrap();
     }
+}
+
+fn get_pods_action(store: Store, action_tx: Sender<TUIAction>) {
+        action_tx.send(TUIAction::GetPods).unwrap();
 }
 
 fn calculate_scroll(lines: String, estate: Rect) -> u16 {

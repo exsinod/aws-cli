@@ -29,6 +29,7 @@ pub struct Store {
     pub login_log: Option<String>,
     pub logs: Option<String>,
     pub log_thread_started: bool,
+    pub pods: Option<String>,
 }
 
 impl Store {
@@ -40,6 +41,7 @@ impl Store {
             login_log: None,
             logs: None,
             log_thread_started: false,
+            pods: None,
         }
     }
 }
@@ -52,7 +54,9 @@ pub enum TUIEvent {
     IsLoggedIn,
     AddLoginLog(String),
     LogThreadStarted,
+    LogThreadStopped,
     AddLog(String),
+    AddPods(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -60,6 +64,7 @@ pub enum TUIAction {
     CheckConnectivity,
     LogIn,
     GetLogs,
+    GetPods,
 }
 
 enum UserInput {
@@ -77,7 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let stdout = FileAppender::builder().append(false).build("./logs.txt").unwrap();
     let config = Config::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .build(Root::builder().appender("stdout").build(LevelFilter::Trace))
+        .build(Root::builder().appender("stdout").build(LevelFilter::Debug))
         .unwrap();
     let _handle = log4rs::init_config(config).unwrap();
     debug!("Logging init");
