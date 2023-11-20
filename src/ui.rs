@@ -1,146 +1,204 @@
-use std::sync::mpsc::Sender;
+use crate::widgets::{CliWidgetId, RenderWidget};
+use std::{cell::RefCell, rc::Rc, sync::mpsc::Sender};
 
+use log::trace;
 use ratatui::{
     prelude::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::Span,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
-use crate::{Store, TUIAction};
+use crate::{widgets::CliWidget, Store, TUIAction};
 
-pub fn ui(f: &mut Frame<'_>, store: Store, action_tx: Sender<TUIAction>) {
-    let main_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(vec![Constraint::Max(1), Constraint::Percentage(90)])
-        .split(f.size());
-    let header_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(main_layout[0]);
+#[derive(Clone)]
+pub struct UITransform {
+    pub direction: Option<crate::Direction>,
+}
 
-    f.render_widget(header_error(store.clone()), header_layout[0]);
-    f.render_widget(header_login_info(store.clone()), header_layout[1]);
-
-    if let true = store.logged_in {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_layout[1]);
-        render_widget_and_call(f, store.clone(), store.clone().logs, action_tx.clone(), get_logs_action, layout[0]);
-        render_widget_and_call(f, store.clone(), store.pods, action_tx.clone(), get_pods_action, layout[1]);
-    } else {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_layout[1]);
-        f.render_widget(
-            content_in_white(
-                "Login script".to_string(),
-                store.clone().login_log,
-                layout[1],
-            )
-            .unwrap_or_default(),
-            layout[1],
-        );
+impl UITransform {
+    pub fn new() -> Self {
+        UITransform { direction: None }
     }
 }
 
-fn render_widget_and_call(
-    f: &mut Frame,
-    store: Store,
-    data: Option<String>,
+pub struct UI {
+    pub layout: Option<Vec<Rect>>,
+    pub widgets: Vec<Rc<RefCell<CliWidget>>>,
+    pub ui_transform: UITransform,
+    pub store: Store,
     action_tx: Sender<TUIAction>,
-    do_action: fn(store: Store, action_thread: Sender<TUIAction>),
-    rect: Rect,
-) {
-        do_action(store.clone(), action_tx);
+}
+
+impl<'a> UI {
+    pub fn new(store: Store, action_tx: Sender<TUIAction>) -> Self {
+        UI {
+            layout: None,
+            widgets: Vec::new(),
+            ui_transform: UITransform::new(),
+            store,
+            action_tx,
+        }
+    }
+
+    pub fn add_layout(&mut self, layout: Vec<Rect>) {
+        self.layout = Some(layout)
+    }
+    pub fn add_widgets(&mut self, mut widgets: Vec<CliWidget>) {
+        for (i, widget) in widgets.iter_mut().enumerate() {
+            widget.pos = i;
+            self.widgets.push(Rc::new(RefCell::new(widget.clone())));
+        }
+    }
+
+    pub fn update_widgets(&mut self) {
+        let mut updated_widgets = vec![];
+
+        for widget in self.widgets.iter_mut() {
+            let mut widget_taken = widget.borrow_mut();
+            if let Some(data_fn) = widget_taken.data_fn {
+                let data = data_fn(self.store.clone());
+                widget_taken.data = data.clone();
+                updated_widgets.push(Rc::new(RefCell::new(widget_taken.clone())));
+
+                trace!(
+                    "update_widgets, widget is {:?}, data is {:?}, store is {:?}",
+                    widget,
+                    data,
+                    self.store
+                );
+            }
+        }
+        if !updated_widgets.is_empty() {
+            self.widgets = updated_widgets.clone();
+            trace!("updated_widgets are {:?}", updated_widgets);
+        }
+        //
+        // if let Some(direction) = &self.ui_transform.direction {
+        //     match direction {
+        //         crate::Direction::Right => {
+        //             self.pos = 1;
+        //         }
+        //         crate::Direction::Left => {
+        //             self.pos = 2;
+        //         }
+        //         _ => {}
+        //     }
+        // }
+        // if self.pos == 1 {
+        //     logs_widget.is_selected(false);
+        //     pods_widget.is_selected(true);
+        // } else if self.pos == 2 {
+        //     logs_widget.is_selected(true);
+        //     pods_widget.is_selected(false);
+        // }
+    }
+
+    pub fn ui(&mut self, f: &mut Frame<'_>) {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Max(1), Constraint::Percentage(90)])
+            .split(f.size());
+        let header_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_layout[0]);
+
+        f.render_widget(Self::header_error(self.store.clone()), header_layout[0]);
         f.render_widget(
-            content_in_black(
-                "Salespoint V2 logs".to_string(),
-                data,
-                rect,
-            )
-            .unwrap_or_default(),
-            rect,
+            Self::header_login_info(self.store.clone()),
+            header_layout[1],
         );
-}
+        self.update_widgets();
 
-fn get_logs_action(store: Store, action_tx: Sender<TUIAction>) {
-    if let false = store.log_thread_started {
-        action_tx.send(TUIAction::GetLogs).unwrap();
+        if let true = self.store.logged_in {
+            let layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(main_layout[1]);
+            self.add_layout(layout.to_vec());
+
+            if !self.store.log_thread_started {
+                Self::trigger_action(self.action_tx.clone(), TUIAction::GetLogs);
+                Self::trigger_action(self.action_tx.clone(), TUIAction::GetPods);
+            }
+
+            trace!("widgets after update are {:?}", self.widgets);
+            for (i, widget) in self
+                .widgets
+                .iter()
+                .filter(|w| w.borrow().id != CliWidgetId::Login)
+                .enumerate()
+            {
+                let mut borrow_widget = widget.borrow().clone();
+                borrow_widget.render(f, layout[i]);
+            }
+        } else {
+            let layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Percentage(100)])
+                .split(main_layout[1]);
+            if self.store.login_request {
+                f.render_widget(Paragraph::new("\nWhat do you want to do?\n\n1. retry (I forgot to turn on my VPN)\n2. Login to AWS").block(Block::default().borders(Borders::all()).title("It seems I can't reach your resources...")),
+                Self::centered_rect(layout[0], 50, 30))
+            }
+            let login_widget = self
+                .widgets
+                .iter()
+                .find(|w| w.borrow().id == CliWidgetId::Login)
+                .unwrap()
+                .borrow();
+            trace!("rendering login window {:?}", login_widget);
+            login_widget.clone().render(f, layout[0]);
+        }
     }
-}
 
-fn get_pods_action(store: Store, action_tx: Sender<TUIAction>) {
-        action_tx.send(TUIAction::GetPods).unwrap();
-}
-
-fn calculate_scroll(lines: String, estate: Rect) -> u16 {
-    let mut scroll_to: u16 = 0;
-
-    let lines = lines.matches("\n").count();
-    scroll_to = scroll_to + lines as u16;
-    let height = estate.height - 4;
-    if height > scroll_to {
-        scroll_to = 0;
-    } else {
-        scroll_to = scroll_to - height;
+    fn trigger_action(action_tx: Sender<TUIAction>, action: TUIAction) {
+        action_tx.send(action).unwrap();
     }
-    scroll_to
-}
 
-fn header_error<'a>(store: Store) -> Paragraph<'a> {
-    Paragraph::new(if let Some(error) = store.error {
-        Span::styled(error, Style::default().fg(Color::Red))
-    } else {
-        Span::styled("All is good", Style::default().fg(Color::LightGreen))
-    })
-    .block(Block::new().borders(Borders::NONE))
-    .alignment(Alignment::Right)
-}
-fn header_login_info<'a>(store: Store) -> Paragraph<'a> {
-    Paragraph::new(if store.logged_in {
-        Span::styled(
-            "LOGGED IN".to_string(),
-            Style::default().fg(Color::LightGreen),
-        )
-    } else if let Some(code) = store.login_code {
-        Span::styled(code, Style::default().fg(Color::Yellow))
-    } else {
-        Span::styled("busy".to_string(), Style::default().fg(Color::Red))
-    })
-    .block(Block::new().borders(Borders::NONE))
-    .alignment(Alignment::Right)
-}
-
-fn content_in_black<'a>(title: String, logs: Option<String>, rect: Rect) -> Option<Paragraph<'a>> {
-    if let Some(log) = logs {
-        Some(
-            Paragraph::new(log.to_string())
-                .scroll((calculate_scroll(log, rect), 0))
-                .block(Block::new().title(title).borders(Borders::ALL))
-                .style(Style::new().fg(Color::White).bg(Color::Black))
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: false }),
-        )
-    } else {
-        None
+    fn header_error(store: Store) -> Paragraph<'a> {
+        Paragraph::new(if let Some(error) = store.error {
+            Span::styled(error, Style::default().fg(Color::Red))
+        } else {
+            Span::styled("All is good", Style::default().fg(Color::LightGreen))
+        })
+        .block(Block::new().borders(Borders::NONE))
+        .alignment(Alignment::Right)
     }
-}
+    fn header_login_info(store: Store) -> Paragraph<'a> {
+        Paragraph::new(if store.logged_in {
+            Span::styled(
+                "LOGGED IN".to_string(),
+                Style::default().fg(Color::LightGreen),
+            )
+        } else if let Some(code) = store.login_code {
+            Span::styled(code, Style::default().fg(Color::Yellow))
+        } else {
+            Span::styled("busy".to_string(), Style::default().fg(Color::Red))
+        })
+        .block(Block::new().borders(Borders::NONE))
+        .alignment(Alignment::Right)
+    }
 
-fn content_in_white<'a>(title: String, logs: Option<String>, rect: Rect) -> Option<Paragraph<'a>> {
-    if let Some(log) = logs {
-        Some(
-            Paragraph::new(log.to_string())
-                .scroll((calculate_scroll(log, rect), 0))
-                .block(Block::new().title(title).borders(Borders::ALL))
-                .style(Style::new().bg(Color::White).fg(Color::Black))
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: false }),
-        )
-    } else {
-        None
+    fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
+        let popup_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ])
+            .split(r);
+
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ])
+            .split(popup_layout[1])[1]
     }
 }

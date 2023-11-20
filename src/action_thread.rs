@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Error};
 use std::process::ChildStderr;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 use std::{
     process::{Child, ChildStdout, Command, Stdio},
     str,
@@ -9,31 +9,29 @@ use std::{
     thread,
 };
 
-use log::{debug, trace, LevelFilter};
-use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender, Root};
-use log4rs::Config;
+use log::{debug, trace};
 use regex::Regex;
 
 use crate::{TUIAction, TUIEvent};
 
-pub fn action_thread(
-    event_tx: Sender<TUIEvent>,
-    action_rx: Receiver<TUIAction>,
-    action_tx: Sender<TUIAction>,
-) {
+pub fn action_thread(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
     let event_tx_clone = event_tx.clone();
     while let Ok(action) = action_rx.recv() {
         debug!("handling action: {:?}", action);
         match action {
             TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
-                Ok(_) => {
-                    event_tx.clone().send(TUIEvent::IsLoggedIn).unwrap();
-                    action_tx.clone().send(TUIAction::GetLogs).unwrap();
-                }
+                Ok(_) => match update_kubeconfig(event_tx_clone.clone()) {
+                    Ok(_) => {
+                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
+                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                    }
+                    Err(_) => {
+                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                    }
+                },
                 Err(error) => {
                     on_error(error, event_tx.clone());
-                    event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                    event_tx.clone().send(TUIEvent::RequestLogin).unwrap();
                 }
             },
             TUIAction::LogIn => {
@@ -42,32 +40,17 @@ pub fn action_thread(
             }
             TUIAction::GetLogs => {
                 let event_tx_clone = event_tx_clone.clone();
-                match update_kubeconfig(event_tx_clone.clone()) {
-                    Ok(_) => {
-                        thread::spawn(move || {
-                            event_tx_clone.send(TUIEvent::LogThreadStarted).unwrap();
-                            get_logs(get_logs_command(), event_tx_clone.clone());
-                        });
-                    }
-                    Err(error) => {
-                        on_error(error, event_tx.clone());
-                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
-                        event_tx.clone().send(TUIEvent::LogThreadStopped).unwrap();
-                    }
-                }
+                thread::spawn(move || {
+                    event_tx_clone.send(TUIEvent::LogThreadStarted).unwrap();
+                    get_logs(get_logs_command(), event_tx_clone.clone());
+                });
             }
             TUIAction::GetPods => {
                 let event_tx_clone = event_tx_clone.clone();
-                match check_connectivity(event_tx_clone.clone()) {
-                    Ok(_) => match get_pods() {
-                        Ok(output) => {
-                            event_tx_clone.send(TUIEvent::AddPods(output)).unwrap();
-                        }
-                        Err(error) => {
-                            on_error(error, event_tx.clone());
-                            event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
-                        }
-                    },
+                match get_pods() {
+                    Ok(output) => {
+                        event_tx_clone.send(TUIEvent::AddPods(output)).unwrap();
+                    }
                     Err(error) => {
                         on_error(error, event_tx.clone());
                         event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
@@ -163,6 +146,7 @@ fn get_logs(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
     if let Ok(mut child) = child {
         let child_stdout = open_child_stdout(&mut child);
         let child_stderr = open_child_stderr(&mut child);
+        debug!("open_log_channel for get_logs");
         let (thread_handle, read_stdout_rx, read_stderr_rx) =
             open_log_channel(child_stdout, child_stderr);
         while !thread_handle.is_finished() {
@@ -180,15 +164,14 @@ fn wait_for_output_with_timeout(
     mut child: Child,
     event_tx: Sender<TUIEvent>,
 ) -> Result<String, String> {
-    let now = SystemTime::now();
+    let now = Instant::now();
     let mut result: Option<Result<String, String>> = None;
-    let mut send_error = false;
+    let mut send_error = true;
     while result == None {
         match child.try_wait() {
             Ok(Some(status)) => {
-                debug!("Process finished {:?}", status.to_string());
+                debug!("wait with timeout finished {:?}", status.to_string());
                 if let true = status.success() {
-                    debug!("Process finished successfully");
                     result = match child.wait_with_output() {
                         Ok(output) => Some(Ok(str::from_utf8(&output.stdout).unwrap().to_string())),
                         Err(_) => Some(Err("Error wait_with_output".to_string())),
@@ -201,21 +184,25 @@ fn wait_for_output_with_timeout(
                 }
             }
             Ok(None) => {
-                trace!("Process still waiting");
-                if now + Duration::from_secs(2) < SystemTime::now() && !send_error {
-                    event_tx
-                        .send(TUIEvent::Error("Uhm... VPN on ?".to_string()))
-                        .unwrap();
-                    send_error = true;
+                trace!("wait with timeout still waiting");
+                if now.elapsed().as_secs() > 2 {
+                    if send_error {
+                        let event_tx_clone = event_tx.clone();
+                        send_error = false;
+                        event_tx_clone
+                            .clone()
+                            .send(TUIEvent::Error(crate::TUIError::VPN))
+                            .unwrap();
+                    }
                 }
-                if now + Duration::from_secs(60) < SystemTime::now() {
-                    debug!("Process timed out");
+                if now + Duration::from_secs(60) < Instant::now() {
+                    debug!("wait with timeout timed out");
                     result = Some(Err("timeout".to_string()));
                 };
-                thread::sleep(Duration::from_millis(10))
+                thread::sleep(Duration::from_millis(100))
             }
             Err(_) => {
-                debug!("Process error");
+                debug!("wait with timeout error");
                 result = Some(Err("error".to_string()));
             }
         };
@@ -260,7 +247,9 @@ fn login(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
 }
 
 fn on_error(error: String, event_tx: Sender<TUIEvent>) {
-    event_tx.send(TUIEvent::Error(error)).unwrap();
+    event_tx
+        .send(TUIEvent::Error(crate::TUIError::API(error)))
+        .unwrap();
 }
 
 fn open_child_stdout(child: &mut Child) -> ChildStdout {
@@ -293,7 +282,7 @@ fn open_log_channel(
                     Ok(bytes_read) => {
                         if !text_in_stderr_buf.is_empty() {
                             read_stderr_tx.send(text_in_stderr_buf.clone()).unwrap();
-                            debug!("stderr_buf_reader read {:?}", text_in_stderr_buf);
+                            trace!("stderr_buf_reader read {:?}", text_in_stderr_buf);
                             should_break = true;
                         } else if bytes_read == 0 {
                             debug!("stderr_buf_reader read 0 bytes");
@@ -319,7 +308,7 @@ fn open_log_channel(
                     Ok(bytes_read) => {
                         if !text_in_stdout_buf.is_empty() {
                             read_stdout_tx.send(text_in_stdout_buf.clone()).unwrap();
-                            debug!("stdout_buf_reader read {:?}", text_in_stdout_buf);
+                            trace!("stdout_buf_reader read {:?}", text_in_stdout_buf);
                         } else if bytes_read == 0 {
                             debug!("stdout_buf_reader read 0 bytes");
                             should_break = true;
@@ -332,9 +321,15 @@ fn open_log_channel(
         });
         while !should_break {
             thread::sleep(Duration::from_millis(10));
+            trace!(
+                "not breaking from output thread {:?} {:?}",
+                stderr_thread.thread().id(),
+                stdout_thread.thread().id()
+            );
         }
         stdout_thread.join().unwrap();
         stderr_thread.join().unwrap();
+        debug!("stdout and stderr threads stopped");
     });
     (log_channel_thread, read_stdout_rx, read_stderr_rx)
 }
@@ -409,7 +404,7 @@ fn test_login_fail() {
 
     thread::spawn(move || login(child, event_tx));
 
-    let check_events = vec![TUIEvent::Error("this is an unusual error\n".to_string()),
+    let check_events = vec![TUIEvent::Error(crate::TUIError::API("this is an unusual error\n".to_string())),
             TUIEvent::AddLoginLog("Attempting to automatically open the SSO authorization page in your default browser.\n".to_string()),
             TUIEvent::AddLoginLog("If the browser does not open or you wish to use a different device to authorize this request, open the following URL:\n".to_string()),
             TUIEvent::AddLoginLog("\n".to_string()),
@@ -482,7 +477,7 @@ fn test_wait_with_output_timeout() {
         .spawn();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let mut events = vec![];
-    let check_events = vec![TUIEvent::Error("Uhm... VPN on ?".to_string())];
+    let check_events = vec![TUIEvent::Error(crate::TUIError::VPN)];
     match child {
         Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
             Ok(output) => {
@@ -502,7 +497,7 @@ fn test_wait_with_output_timeout() {
 
 #[test]
 fn test_wait_with_output_timeout_fail() {
-    enable_logging();
+    crate::init_logging().unwrap();
     let child = Command::new("sh")
         .arg("-C")
         .arg("test_res/check_connectivity_fail.sh")
@@ -511,7 +506,7 @@ fn test_wait_with_output_timeout_fail() {
         .spawn();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let mut events: Vec<TUIEvent> = vec![];
-    let check_events = vec![TUIEvent::Error("Uhm... VPN on ?".to_string())];
+    let check_events = vec![TUIEvent::Error(crate::TUIError::VPN)];
     match child {
         Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
             Ok(_) => {}
@@ -527,16 +522,4 @@ fn test_wait_with_output_timeout_fail() {
         },
         Err(_) => {}
     }
-}
-
-fn enable_logging() {
-    let stdout = FileAppender::builder()
-        .append(false)
-        .build("./logs.txt")
-        .unwrap();
-    let config = Config::builder()
-        .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .build(Root::builder().appender("stdout").build(LevelFilter::Trace))
-        .unwrap();
-    log4rs::init_config(config).unwrap();
 }

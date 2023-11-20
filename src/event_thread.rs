@@ -14,20 +14,52 @@ pub fn event_thread(
     action_tx.send(TUIAction::CheckConnectivity).unwrap();
     while let Ok(event) = event_rx.recv() {
         debug!("handling event: {:?}", event);
+        let store_tx_clone = store_tx.clone();
         match event {
-            TUIEvent::Error(error) => {
-                store.error = Some(error);
+            TUIEvent::Error(error) => match error {
+                crate::TUIError::VPN => {
+                    store.error = Some("Uhm... VPN on ?".to_string());
+                    send_store(store_tx_clone.clone(), store.clone());
+                }
+                crate::TUIError::KEY(error) | crate::TUIError::API(error) => {
+                    store.error = Some(error);
+                    send_store(store_tx_clone.clone(), store.clone());
+                }
+            },
+            TUIEvent::ClearError => {
+                store.error = None;
+                send_store(store_tx_clone.clone(), store.clone());
+            }
+            TUIEvent::CheckConnectivity => {
+                store.login_request = false;
+                send_store(store_tx.clone(), store.clone());
+                action_tx.send(TUIAction::CheckConnectivity).unwrap();
+            }
+            TUIEvent::RequestLogin => {
+                store.login_request = true;
+                send_store(store_tx.clone(), store.clone())
+            }
+            TUIEvent::RequestLoginInput(input) => {
+                if input == "1" {
+                    action_tx.send(TUIAction::GetLogs).unwrap();
+                } else if input == "2" {
+                    action_tx.send(TUIAction::LogIn).unwrap();
+                } else {
+                    debug!("input was {:?}", input);
+                }
                 send_store(store_tx.clone(), store.clone())
             }
             TUIEvent::NeedsLogin => {
-                store.error = Some("Require login".to_string());
                 action_tx.send(TUIAction::LogIn).unwrap();
-                send_store(store_tx.clone(), store.clone())
             }
             TUIEvent::IsLoggedIn => {
-                store.error = None;
                 store.logged_in = true;
-                send_store(store_tx.clone(), store.clone())
+                send_store(store_tx.clone(), store.clone());
+                action_tx.send(TUIAction::CheckConnectivity).unwrap();
+            }
+            TUIEvent::IsConnected => {
+                store.logged_in = true;
+                send_store(store_tx.clone(), store.clone());
             }
             TUIEvent::DisplayLoginCode(code) => {
                 store.login_code = Some(code);
@@ -44,15 +76,16 @@ pub fn event_thread(
             TUIEvent::LogThreadStarted => {
                 store.log_thread_started = true;
                 send_store(store_tx.clone(), store.clone())
-            },
+            }
             TUIEvent::LogThreadStopped => {
                 store.log_thread_started = false;
                 send_store(store_tx.clone(), store.clone())
-            },
+            }
             TUIEvent::AddPods(pods) => {
                 store.pods = Some(pods);
                 send_store(store_tx.clone(), store.clone())
             }
+            _ => {}
         }
     }
 }
