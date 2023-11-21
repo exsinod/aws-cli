@@ -1,16 +1,10 @@
-use crate::widgets::{CliWidgetId, RenderWidget};
-use std::{cell::RefCell, rc::Rc, sync::mpsc::Sender};
+use crate::widgets::{HeaderWidget, RenderWidget};
+use std::rc::Rc;
 
-use log::trace;
 use ratatui::{
-    prelude::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    text::Span,
-    widgets::{Block, Borders, Paragraph},
+    prelude::{Constraint, Direction, Layout, Rect},
     Frame,
 };
-
-use crate::{widgets::CliWidget, Store, TUIAction};
 
 #[derive(Clone)]
 pub struct UITransform {
@@ -23,182 +17,96 @@ impl UITransform {
     }
 }
 
-pub struct UI {
-    pub layout: Option<Vec<Rect>>,
-    pub widgets: Vec<Rc<RefCell<CliWidget>>>,
-    pub ui_transform: UITransform,
-    pub store: Store,
-    action_tx: Sender<TUIAction>,
+pub trait ShowUI<'a> {
+    fn ui(&mut self, f: &mut Frame<'_>);
 }
 
-impl<'a> UI {
-    pub fn new(store: Store, action_tx: Sender<TUIAction>) -> Self {
+#[derive(Clone)]
+pub struct SingleLayoutUI {}
+
+impl SingleLayoutUI {
+    pub fn new() -> Self {
+        SingleLayoutUI {}
+    }
+
+    pub fn get_body_rect(&self, f: &mut Frame<'_>) -> Rect {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Percentage(100)])
+            .split(f.size())[0]
+    }
+}
+
+#[derive(Clone)]
+pub struct MainLayoutUI<'a> {
+    pub draw_frame: Option<fn() -> &'a mut Frame<'a>>,
+}
+
+impl<'a> MainLayoutUI<'a> {
+    pub fn new() -> Self {
+        MainLayoutUI { draw_frame: None }
+    }
+
+    pub fn get_body_rect(&self, f: &mut Frame<'_>) -> Rc<[Rect]> {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Max(1), Constraint::Max(1), Constraint::Percentage(90)])
+            .split(f.size());
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_layout[2])
+    }
+
+    pub fn get_header_rect(&self, line: usize, f: &mut Frame<'_>) -> Rc<[Rect]> {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Max(1), Constraint::Max(1), Constraint::Percentage(90)])
+            .split(f.size());
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_layout[line])
+    }
+}
+
+pub struct UI<'a> {
+    main_layout: Option<MainLayoutUI<'a>>,
+    single_layout: Option<SingleLayoutUI>,
+    pub widgets: Vec<Box<dyn RenderWidget>>,
+    pub widget_fn: Option<fn(f: &mut Frame<'_>, layout: Rect)>,
+    pub ui_transform: UITransform,
+}
+
+impl<'a> UI<'a> {
+    pub fn main(main_layout: &MainLayoutUI<'a>) -> Self {
         UI {
-            layout: None,
-            widgets: Vec::new(),
+            main_layout: Some(main_layout.clone()),
+            single_layout: None,
+            widgets: vec![Box::new(HeaderWidget::default())],
+            widget_fn: None,
             ui_transform: UITransform::new(),
-            store,
-            action_tx,
         }
     }
-
-    pub fn add_layout(&mut self, layout: Vec<Rect>) {
-        self.layout = Some(layout)
-    }
-    pub fn add_widgets(&mut self, mut widgets: Vec<CliWidget>) {
-        for (i, widget) in widgets.iter_mut().enumerate() {
-            widget.pos = i;
-            self.widgets.push(Rc::new(RefCell::new(widget.clone())));
+    pub fn single(main_layout: &SingleLayoutUI) -> Self {
+        UI {
+            main_layout: None,
+            single_layout: Some(main_layout.clone()),
+            widgets: vec![Box::new(HeaderWidget::default())],
+            widget_fn: None,
+            ui_transform: UITransform::new(),
         }
-    }
-
-    pub fn update_widgets(&mut self) {
-        let mut updated_widgets = vec![];
-
-        for widget in self.widgets.iter_mut() {
-            let mut widget_taken = widget.borrow_mut();
-            if let Some(data_fn) = widget_taken.data_fn {
-                let data = data_fn(self.store.clone());
-                widget_taken.data = data.clone();
-                updated_widgets.push(Rc::new(RefCell::new(widget_taken.clone())));
-
-                trace!(
-                    "update_widgets, widget is {:?}, data is {:?}, store is {:?}",
-                    widget,
-                    data,
-                    self.store
-                );
-            }
-        }
-        if !updated_widgets.is_empty() {
-            self.widgets = updated_widgets.clone();
-            trace!("updated_widgets are {:?}", updated_widgets);
-        }
-        //
-        // if let Some(direction) = &self.ui_transform.direction {
-        //     match direction {
-        //         crate::Direction::Right => {
-        //             self.pos = 1;
-        //         }
-        //         crate::Direction::Left => {
-        //             self.pos = 2;
-        //         }
-        //         _ => {}
-        //     }
-        // }
-        // if self.pos == 1 {
-        //     logs_widget.is_selected(false);
-        //     pods_widget.is_selected(true);
-        // } else if self.pos == 2 {
-        //     logs_widget.is_selected(true);
-        //     pods_widget.is_selected(false);
-        // }
     }
 
     pub fn ui(&mut self, f: &mut Frame<'_>) {
-        let main_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Max(1), Constraint::Percentage(90)])
-            .split(f.size());
-        let header_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_layout[0]);
-
-        f.render_widget(Self::header_error(self.store.clone()), header_layout[0]);
-        f.render_widget(
-            Self::header_login_info(self.store.clone()),
-            header_layout[1],
-        );
-        self.update_widgets();
-
-        if let true = self.store.logged_in {
-            let layout = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(main_layout[1]);
-            self.add_layout(layout.to_vec());
-
-            if !self.store.log_thread_started {
-                Self::trigger_action(self.action_tx.clone(), TUIAction::GetLogs);
-                Self::trigger_action(self.action_tx.clone(), TUIAction::GetPods);
+        if let Some(main_layout) = &self.main_layout {
+            for widget in self.widgets.iter_mut() {
+                widget.render(f, main_layout.clone());
             }
-
-            trace!("widgets after update are {:?}", self.widgets);
-            for (i, widget) in self
-                .widgets
-                .iter()
-                .filter(|w| w.borrow().id != CliWidgetId::Login)
-                .enumerate()
-            {
-                let mut borrow_widget = widget.borrow().clone();
-                borrow_widget.render(f, layout[i]);
-            }
-        } else {
-            let layout = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![Constraint::Percentage(100)])
-                .split(main_layout[1]);
-            if self.store.login_request {
-                f.render_widget(Paragraph::new("\nWhat do you want to do?\n\n1. retry (I forgot to turn on my VPN)\n2. Login to AWS").block(Block::default().borders(Borders::all()).title("It seems I can't reach your resources...")),
-                Self::centered_rect(layout[0], 50, 30))
-            }
-            let login_widget = self
-                .widgets
-                .iter()
-                .find(|w| w.borrow().id == CliWidgetId::Login)
-                .unwrap()
-                .borrow();
-            trace!("rendering login window {:?}", login_widget);
-            login_widget.clone().render(f, layout[0]);
         }
-    }
-
-    fn trigger_action(action_tx: Sender<TUIAction>, action: TUIAction) {
-        action_tx.send(action).unwrap();
-    }
-
-    fn header_error(store: Store) -> Paragraph<'a> {
-        Paragraph::new(if let Some(error) = store.error {
-            Span::styled(error, Style::default().fg(Color::Red))
-        } else {
-            Span::styled("All is good", Style::default().fg(Color::LightGreen))
-        })
-        .block(Block::new().borders(Borders::NONE))
-        .alignment(Alignment::Right)
-    }
-    fn header_login_info(store: Store) -> Paragraph<'a> {
-        Paragraph::new(if store.logged_in {
-            Span::styled(
-                "LOGGED IN".to_string(),
-                Style::default().fg(Color::LightGreen),
-            )
-        } else if let Some(code) = store.login_code {
-            Span::styled(code, Style::default().fg(Color::Yellow))
-        } else {
-            Span::styled("busy".to_string(), Style::default().fg(Color::Red))
-        })
-        .block(Block::new().borders(Borders::NONE))
-        .alignment(Alignment::Right)
-    }
-
-    fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
-        let popup_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((100 - percent_y) / 2),
-                Constraint::Percentage(percent_y),
-                Constraint::Percentage((100 - percent_y) / 2),
-            ])
-            .split(r);
-
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage((100 - percent_x) / 2),
-                Constraint::Percentage(percent_x),
-                Constraint::Percentage((100 - percent_x) / 2),
-            ])
-            .split(popup_layout[1])[1]
+        if let Some(single_layout) = &self.single_layout {
+            let rect = single_layout.get_body_rect(f);
+            (self.widget_fn.unwrap())(f, rect);
+        }
     }
 }

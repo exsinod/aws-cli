@@ -12,15 +12,32 @@ use std::{
 use log::{debug, trace};
 use regex::Regex;
 
-use crate::{TUIAction, TUIEvent};
+use crate::structs::{TUIError, KubeEnvData, PROD, DEV, KubeEnv};
+use crate::{init_logging, TUIAction, TUIEvent};
 
-pub fn action_thread(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
+pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
+    let mut logs_thread = false;
     let event_tx_clone = event_tx.clone();
     while let Ok(action) = action_rx.recv() {
         debug!("handling action: {:?}", action);
         match action {
+            TUIAction::ChangeEnv(env) => {
+                let env_data = match env {
+                    KubeEnv::Dev => DEV,
+                    KubeEnv::Prod => PROD,
+                };
+                match update_kubeconfig(env_data, event_tx_clone.clone()) {
+                    Ok(_) => {
+                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
+                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                    }
+                    Err(_) => {
+                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                    }
+                }
+            }
             TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
-                Ok(_) => match update_kubeconfig(event_tx_clone.clone()) {
+                Ok(_) => match update_kubeconfig(DEV, event_tx_clone.clone()) {
                     Ok(_) => {
                         event_tx.clone().send(TUIEvent::IsConnected).unwrap();
                         event_tx.clone().send(TUIEvent::ClearError).unwrap();
@@ -31,7 +48,7 @@ pub fn action_thread(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>)
                 },
                 Err(error) => {
                     on_error(error, event_tx.clone());
-                    event_tx.clone().send(TUIEvent::RequestLogin).unwrap();
+                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                 }
             },
             TUIAction::LogIn => {
@@ -40,10 +57,18 @@ pub fn action_thread(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>)
             }
             TUIAction::GetLogs => {
                 let event_tx_clone = event_tx_clone.clone();
-                thread::spawn(move || {
-                    event_tx_clone.send(TUIEvent::LogThreadStarted).unwrap();
-                    get_logs(get_logs_command(), event_tx_clone.clone());
-                });
+                    logs_thread = true;
+                    thread::spawn(move || {
+                        while logs_thread {
+                            if let Err(error) =
+                                get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
+                            {
+                                event_tx_clone
+                                    .send(TUIEvent::Error(TUIError::API(error)))
+                                    .unwrap();
+                            }
+                        }
+                    });
             }
             TUIAction::GetPods => {
                 let event_tx_clone = event_tx_clone.clone();
@@ -53,7 +78,7 @@ pub fn action_thread(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>)
                     }
                     Err(error) => {
                         on_error(error, event_tx.clone());
-                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                     }
                 }
             }
@@ -92,15 +117,14 @@ fn get_logs_command() -> Result<Child, Error> {
         .stderr(Stdio::piped())
         .spawn()
 }
-
-fn update_kubeconfig_command() -> Result<Child, Error> {
+fn update_kubeconfig_command(kube_env: KubeEnvData) -> Result<Child, Error> {
     Command::new("aws")
         .arg("eks")
         .arg("--profile")
-        .arg("eks-non-prod-myccv-lab-developer") //config
+        .arg(kube_env.profile) //config
         .arg("update-kubeconfig")
         .arg("--name")
-        .arg("shared-non-prod-2") //config
+        .arg(kube_env.environment) //config
         // Command::new("cat")
         //     .arg("aws_sso_mock.sh") //config
         .stdout(Stdio::piped())
@@ -121,8 +145,8 @@ fn get_pods_command() -> Result<Child, Error> {
         .spawn()
 }
 
-fn update_kubeconfig(event_tx: Sender<TUIEvent>) -> Result<String, String> {
-    match update_kubeconfig_command() {
+fn update_kubeconfig(kube_env: KubeEnvData, event_tx: Sender<TUIEvent>) -> Result<String, String> {
+    match update_kubeconfig_command(kube_env) {
         Ok(child) => wait_for_output_with_timeout(child, event_tx),
         Err(error) => Err(error.to_string()),
     }
@@ -142,22 +166,41 @@ fn check_connectivity(event_tx: Sender<TUIEvent>) -> Result<String, String> {
     }
 }
 
-fn get_logs(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
-    if let Ok(mut child) = child {
+fn get_logs(
+    child: Result<Child, Error>,
+    event_tx: Sender<TUIEvent>,
+    timeout_fn: fn(Instant) -> bool,
+) -> Result<(), String> {
+    return if let Ok(mut child) = child {
+        let now = Instant::now();
+        let mut has_error = false;
         let child_stdout = open_child_stdout(&mut child);
         let child_stderr = open_child_stderr(&mut child);
         debug!("open_log_channel for get_logs");
         let (thread_handle, read_stdout_rx, read_stderr_rx) =
             open_log_channel(child_stdout, child_stderr);
         while !thread_handle.is_finished() {
+            if timeout_fn(now) {
+                child.kill().unwrap();
+            }
             if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
                 on_error(error.clone(), event_tx.clone());
+                has_error = true;
             }
             if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
                 add_logs(event_tx.clone(), line.clone());
             }
         }
-    }
+        if !child.wait().unwrap().success() || has_error {
+            debug!("child had errors");
+            Err("process experienced some errors".to_string())
+        } else {
+            debug!("child had no errors");
+            Ok(())
+        }
+    } else {
+        Err("process quit immediately".to_string())
+    };
 }
 
 fn wait_for_output_with_timeout(
@@ -185,13 +228,13 @@ fn wait_for_output_with_timeout(
             }
             Ok(None) => {
                 trace!("wait with timeout still waiting");
-                if now.elapsed().as_secs() > 2 {
+                if now.elapsed().as_secs() > 1 {
                     if send_error {
                         let event_tx_clone = event_tx.clone();
                         send_error = false;
                         event_tx_clone
                             .clone()
-                            .send(TUIEvent::Error(crate::TUIError::VPN))
+                            .send(TUIEvent::Error(TUIError::VPN))
                             .unwrap();
                     }
                 }
@@ -238,8 +281,8 @@ fn login(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
                 on_error(error.clone(), event_tx.clone());
             }
             if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
-                check_login_status(line.clone(), event_tx.clone());
                 add_login_logs(event_tx.clone(), line.clone());
+                check_login_status(line.clone(), event_tx.clone());
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -248,7 +291,7 @@ fn login(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
 
 fn on_error(error: String, event_tx: Sender<TUIEvent>) {
     event_tx
-        .send(TUIEvent::Error(crate::TUIError::API(error)))
+        .send(TUIEvent::Error(TUIError::API(error)))
         .unwrap();
 }
 
@@ -266,10 +309,13 @@ fn open_log_channel(
 ) -> (JoinHandle<()>, Receiver<String>, Receiver<String>) {
     let (read_stdout_tx, read_stdout_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
     let (read_stderr_tx, read_stderr_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    let (err_tx, err_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    let err_tx_clone = err_tx.clone();
     let mut should_break = false;
     let log_channel_thread: JoinHandle<()> = thread::spawn(move || {
         let stderr_thread = thread::spawn(move || {
             debug!("stderr thread started");
+            let mut should_break = false;
             let mut stderr_buf_reader = BufReader::new(stderr);
 
             while !should_break {
@@ -277,15 +323,24 @@ fn open_log_channel(
                 match stderr_buf_reader.read_line(&mut text_in_stderr_buf) {
                     Err(_) => {
                         debug!("stderr_buf_reader error");
+                        err_tx_clone
+                            .send("stderr buf reader error".to_string())
+                            .unwrap();
                         should_break = true;
                     }
                     Ok(bytes_read) => {
                         if !text_in_stderr_buf.is_empty() {
                             read_stderr_tx.send(text_in_stderr_buf.clone()).unwrap();
-                            trace!("stderr_buf_reader read {:?}", text_in_stderr_buf);
+                            err_tx_clone
+                                .send(format!("stderr buf reader error: {:?}", text_in_stderr_buf))
+                                .unwrap();
                             should_break = true;
+                            trace!("stderr_buf_reader read {:?}", text_in_stderr_buf);
                         } else if bytes_read == 0 {
-                            debug!("stderr_buf_reader read 0 bytes");
+                            debug!("stderr_buf_reader EOF");
+                            err_tx_clone
+                                .send("stderr buf reader EOF".to_string())
+                                .unwrap();
                             should_break = true;
                         }
                         text_in_stderr_buf.clear()
@@ -295,7 +350,7 @@ fn open_log_channel(
             }
         });
         let stdout_thread = thread::spawn(move || {
-            debug!("stdout thread started");
+            let mut should_break = false;
             let mut stdout_buf_reader = BufReader::new(stdout);
 
             while !should_break {
@@ -303,14 +358,20 @@ fn open_log_channel(
                 match stdout_buf_reader.read_line(&mut text_in_stdout_buf) {
                     Err(_) => {
                         debug!("stdout_buf_reader error");
+                        err_tx.send("stdout buf reader error".to_string()).unwrap();
                         should_break = true;
                     }
                     Ok(bytes_read) => {
                         if !text_in_stdout_buf.is_empty() {
-                            read_stdout_tx.send(text_in_stdout_buf.clone()).unwrap();
+                            read_stdout_tx
+                                .send(text_in_stdout_buf.clone())
+                                .unwrap_or(());
                             trace!("stdout_buf_reader read {:?}", text_in_stdout_buf);
                         } else if bytes_read == 0 {
-                            debug!("stdout_buf_reader read 0 bytes");
+                            debug!("stdout_buf_reader EOF");
+                            err_tx
+                                .send("stdout buf reader EOF".to_string())
+                                .unwrap_or(());
                             should_break = true;
                         }
                         text_in_stdout_buf.clear()
@@ -320,12 +381,10 @@ fn open_log_channel(
             }
         });
         while !should_break {
-            thread::sleep(Duration::from_millis(10));
-            trace!(
-                "not breaking from output thread {:?} {:?}",
-                stderr_thread.thread().id(),
-                stdout_thread.thread().id()
-            );
+            if let Ok(error) = err_rx.recv() {
+                debug!("received {:?}", error);
+                should_break = true;
+            }
         }
         stdout_thread.join().unwrap();
         stderr_thread.join().unwrap();
@@ -357,7 +416,8 @@ fn add_logs(event_tx: Sender<TUIEvent>, line: String) {
 }
 
 #[test]
-fn test_login() {
+fn test_login_succeed() {
+    init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let child = Command::new("sh")
         .arg("-C")
@@ -376,12 +436,14 @@ fn test_login() {
             TUIEvent::AddLoginLog("\n".to_string()),
             TUIEvent::AddLoginLog("Then enter the code:\n".to_string()),
             TUIEvent::AddLoginLog("\n".to_string()),
-            TUIEvent::DisplayLoginCode("MQBJ-XSZB".to_string()),
             TUIEvent::AddLoginLog("MQBJ-XSZB\n".to_string()),
-            TUIEvent::IsLoggedIn,
-            TUIEvent::AddLoginLog("Successfully\n".to_string())];
+            TUIEvent::DisplayLoginCode("MQBJ-XSZB".to_string()),
+            TUIEvent::AddLoginLog("Successfully\n".to_string()),
+    TUIEvent::IsLoggedIn];
 
     let mut events = vec![];
+
+    thread::sleep(Duration::from_secs(5));
 
     while events != check_events {
         if let Ok(event) = event_rx.recv_timeout(Duration::from_millis(10)) {
@@ -394,6 +456,7 @@ fn test_login() {
 
 #[test]
 fn test_login_fail() {
+    init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let child = Command::new("sh")
         .arg("-C")
@@ -404,16 +467,9 @@ fn test_login_fail() {
 
     thread::spawn(move || login(child, event_tx));
 
-    let check_events = vec![TUIEvent::Error(crate::TUIError::API("this is an unusual error\n".to_string())),
-            TUIEvent::AddLoginLog("Attempting to automatically open the SSO authorization page in your default browser.\n".to_string()),
-            TUIEvent::AddLoginLog("If the browser does not open or you wish to use a different device to authorize this request, open the following URL:\n".to_string()),
-            TUIEvent::AddLoginLog("\n".to_string()),
-            TUIEvent::AddLoginLog("https://device.sso.eu-west-1.amazonaws.com/\n".to_string()),
-            TUIEvent::AddLoginLog("\n".to_string()),
-            TUIEvent::AddLoginLog("Then enter the code:\n".to_string()),
-            TUIEvent::AddLoginLog("\n".to_string()),
-            TUIEvent::DisplayLoginCode("MQBJ-XSZB".to_string()),
-            TUIEvent::AddLoginLog("MQBJ-XSZB\n".to_string())];
+    let check_events = vec![TUIEvent::Error(TUIError::API(
+        "this is an unusual error\n".to_string(),
+    ))];
 
     let mut events = vec![];
 
@@ -427,17 +483,57 @@ fn test_login_fail() {
 }
 
 #[test]
-fn test_get_logs() {
+fn test_open_log_channel() {
+    init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-    let (_, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
-    let child = Command::new("tail")
-        .arg("-f") //config
-        .arg("test_res/get_logs.txt") //config
+    let mut error = None;
+
+    let child = Command::new("sh")
+        .arg("-C") //config
+        .arg("test_res/long_living_process_quits_unexpectedly.sh") //config
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
+    if let Err(err) = get_logs(child, event_tx, |_| false) {
+        error = Some(err);
+    } else {
+        assert!(false, "{:?}", false);
+        error = Some("good".to_string());
+    }
+    let mut events = vec![];
+    let check_events = vec![TUIEvent::AddLog("Beginning...\n".to_string())];
 
-    thread::spawn(move || get_logs(child, event_tx));
+    while events != check_events {
+        if let Ok(event) = event_rx.recv_timeout(Duration::from_millis(10)) {
+            events.push(event);
+        }
+    }
+
+    assert!(events == check_events, "events was: {:?}", events);
+    assert!(
+        error == Some("process experienced some errors".to_string()),
+        "{:?}",
+        error
+    );
+}
+
+#[test]
+fn test_get_logs() {
+    init_logging().unwrap();
+    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
+    let (_, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+
+    thread::spawn(move || {
+        let child = Command::new("tail")
+            .arg("-f") //config
+            .arg("test_res/get_logs.txt") //config
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let timeout_fn: fn(Instant) -> bool =
+            |now| now + Duration::from_millis(300) < Instant::now();
+        get_logs(child, event_tx, timeout_fn).unwrap();
+    });
     let mut events = vec![];
     let mut actions = vec![];
     let check_events = vec![TUIEvent::AddLog("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Mauris vitae efficitur elit, sit amet euismod magna. \n".to_string()),
@@ -469,6 +565,7 @@ TUIEvent::AddLog("Nullam volutpat magna ut leo auctor, sollicitudin pharetra tel
 
 #[test]
 fn test_wait_with_output_timeout() {
+    init_logging().unwrap();
     let child = Command::new("sh")
         .arg("-C")
         .arg("test_res/check_connectivity.sh")
@@ -477,7 +574,7 @@ fn test_wait_with_output_timeout() {
         .spawn();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let mut events = vec![];
-    let check_events = vec![TUIEvent::Error(crate::TUIError::VPN)];
+    let check_events = vec![TUIEvent::Error(TUIError::VPN)];
     match child {
         Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
             Ok(output) => {
@@ -497,27 +594,19 @@ fn test_wait_with_output_timeout() {
 
 #[test]
 fn test_wait_with_output_timeout_fail() {
-    crate::init_logging().unwrap();
+    init_logging().unwrap();
     let child = Command::new("sh")
         .arg("-C")
         .arg("test_res/check_connectivity_fail.sh")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
-    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-    let mut events: Vec<TUIEvent> = vec![];
-    let check_events = vec![TUIEvent::Error(crate::TUIError::VPN)];
+    let (event_tx, _): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     match child {
         Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
             Ok(_) => {}
             Err(error) => {
-                while events.is_empty() {
-                    if let Ok(event) = event_rx.recv_timeout(Duration::from_millis(10)) {
-                        events.push(event);
-                    }
-                }
-                assert!(events == check_events, "events was: {:?}", events);
-                assert!(error == "Exit code 1".to_string(), "error was {:?}", error)
+                assert!(error == "Exit code 1".to_string(), "error was: {:?}", error);
             }
         },
         Err(_) => {}

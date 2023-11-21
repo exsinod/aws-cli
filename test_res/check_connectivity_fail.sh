@@ -9,5 +9,5 @@ Quisque ex magna, vulputate nec porttitor sed, ullamcorper sit amet nisi.
 Nullam placerat metus lectus, congue commodo mi commodo in. 
 Nullam volutpat magna ut leo auctor, sollicitudin pharetra tellus malesuada."
 
-sleep 3
+sleep 1
 exit 1
