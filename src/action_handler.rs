@@ -12,7 +12,7 @@ use std::{
 use log::{debug, trace};
 use regex::Regex;
 
-use crate::structs::{TUIError, KubeEnvData, PROD, DEV, KubeEnv};
+use crate::structs::{KubeEnv, KubeEnvData, TUIError, DEV, PROD};
 use crate::{init_logging, TUIAction, TUIEvent};
 
 pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
@@ -32,7 +32,7 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                         event_tx.clone().send(TUIEvent::ClearError).unwrap();
                     }
                     Err(_) => {
-                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                     }
                 }
             }
@@ -43,7 +43,7 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                         event_tx.clone().send(TUIEvent::ClearError).unwrap();
                     }
                     Err(_) => {
-                        event_tx.clone().send(TUIEvent::NeedsLogin).unwrap();
+                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                     }
                 },
                 Err(error) => {
@@ -57,18 +57,18 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
             }
             TUIAction::GetLogs => {
                 let event_tx_clone = event_tx_clone.clone();
-                    logs_thread = true;
-                    thread::spawn(move || {
-                        while logs_thread {
-                            if let Err(error) =
-                                get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
-                            {
-                                event_tx_clone
-                                    .send(TUIEvent::Error(TUIError::API(error)))
-                                    .unwrap();
-                            }
+                logs_thread = true;
+                thread::spawn(move || {
+                    while logs_thread {
+                        if let Err(error) =
+                            get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
+                        {
+                            event_tx_clone
+                                .send(TUIEvent::Error(TUIError::API(error)))
+                                .unwrap();
                         }
-                    });
+                    }
+                });
             }
             TUIAction::GetPods => {
                 let event_tx_clone = event_tx_clone.clone();

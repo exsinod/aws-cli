@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use log::trace;
+use log::{debug, trace};
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Style},
@@ -9,7 +9,10 @@ use ratatui::{
     Frame,
 };
 
-use crate::{structs::CliWidgetData, ui::MainLayoutUI};
+use crate::{
+    structs::{CliWidgetData, TUIAction},
+    ui::MainLayoutUI,
+};
 
 #[derive(Debug, Default, Clone, Hash, Eq, PartialEq)]
 pub enum CliWidgetId {
@@ -28,24 +31,30 @@ pub trait RenderWithWidgetData {
 
 pub trait RenderWidget {
     fn render(&mut self, f: &mut Frame, layout: MainLayoutUI);
-    fn get_data(&mut self, key: String) -> CliWidgetData;
-    fn set_thread_started(&mut self, key: String, started: bool);
-    fn set_text_data(
-        &mut self,
-        key: String,
-        text: Option<String>,
-    ) -> HashMap<String, CliWidgetData>;
+    fn get_data(&mut self) -> CliWidgetData;
+    fn set_thread_started(&mut self, started: bool);
+    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData;
+    fn clear_text_data(&mut self, key: String) -> CliWidgetData;
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct HeaderWidget {
-    widget: CliWidget,
+    pub widget: CliWidget,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct BodyWidget {
     black: bool,
-    widget: CliWidget,
+    pub widget: CliWidget,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct CliWidget {
+    pub id: CliWidgetId,
+    pub title: Option<String>,
+    pub data: CliWidgetData,
+    pub pos: usize,
+    is_selected: bool,
 }
 
 impl HeaderWidget {
@@ -54,63 +63,27 @@ impl HeaderWidget {
     }
 }
 
-impl<'a> RenderWidget for HeaderWidget {
-    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI) {
-        let rect = layout.get_header_rect(0, f);
-        f.render_widget(
-            self.header_error(
-                self.widget
-                    .data
-                    .get("error")
-                    .and_then(|d| d.text.clone()),
-            ),
-            rect[0],
-        );
-        f.render_widget(
-            self.header_login_info(
-                false,
-                self.widget
-                    .data
-                    .get("login_info")
-                    .and_then(|d| d.text.clone()),
-            ),
-            rect[1],
-        );
-        let rect = layout.get_header_rect(1, f);
-        f.render_widget(
-            self.kube_info(
-                self.widget
-                    .data
-                    .get("kube_info")
-                    .and_then(|d| d.text.clone()),
-            ),
-            rect[0],
-        );
-    }
-
-    fn get_data(&mut self, key: String) -> CliWidgetData {
-        self.widget.data.get(&key).unwrap().clone()
-    }
-
-    fn set_thread_started(&mut self, key: String, started: bool) {
-        self.widget.data.get_mut(&key).unwrap().thread_started = started
-    }
-
-    fn set_text_data(
-        &mut self,
-        key: String,
-        text: Option<String>,
-    ) -> HashMap<String, CliWidgetData> {
-        self.widget.data.get_mut(&key).unwrap().text = text;
-        self.widget.data.clone()
+impl BodyWidget {
+    pub fn new(black: bool, widget: CliWidget) -> Self {
+        BodyWidget { black, widget }
     }
 }
 
 impl<'a> HeaderWidget {
     fn kube_info(&self, text: Option<String>) -> Paragraph<'a> {
-        Paragraph::new(Span::styled(text.unwrap_or("".to_string()), Style::default().fg(Color::Red)))
-        .block(Block::new().borders(Borders::NONE))
-        .alignment(Alignment::Right)
+        let mut span = Span::default();
+        if let Some(text) = text {
+            if text == "Dev" {
+                span = Span::styled(text, Style::default().fg(Color::Green));
+            } else if text == "Prod" {
+                span = Span::styled(text, Style::default().fg(Color::Red));
+            }
+            Paragraph::new(span)
+                .block(Block::new().borders(Borders::NONE))
+                .alignment(Alignment::Right)
+        } else {
+            Paragraph::new(Span::raw("")).block(Block::new().borders(Borders::NONE))
+        }
     }
     fn header_error(&self, text: Option<String>) -> Paragraph<'a> {
         Paragraph::new(if let Some(error) = text {
@@ -138,80 +111,122 @@ impl<'a> HeaderWidget {
     }
 }
 
+impl<'a> RenderWidget for HeaderWidget {
+    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI) {
+        let rect = layout.get_header_rect(0, f);
+        f.render_widget(
+            self.header_error(
+                self.widget
+                    .data
+                    .clone()
+                    .data
+                    .get("error")
+                    .and_then(|d| d.clone()),
+            ),
+            rect[0],
+        );
+        f.render_widget(
+            self.header_login_info(
+                false,
+                self.widget
+                    .data
+                    .clone()
+                    .data
+                    .get("login_info")
+                    .and_then(|d| d.clone()),
+            ),
+            rect[1],
+        );
+        let rect = layout.get_header_rect(1, f);
+        f.render_widget(
+            self.kube_info(
+                self.widget
+                    .data
+                    .clone()
+                    .data
+                    .get("kube_info")
+                    .and_then(|d| d.clone()),
+            ),
+            rect[0],
+        );
+    }
+
+    fn get_data(&mut self) -> CliWidgetData {
+        self.widget.data.clone()
+    }
+
+    fn set_thread_started(&mut self, started: bool) {
+        self.widget.data.thread_started = started
+    }
+
+    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData {
+        self.widget.data.data.insert(key, Some(text));
+        self.widget.data.clone()
+    }
+
+    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
+        self.widget.data.clone().data.insert(key, None);
+        self.widget.data.clone()
+    }
+}
+
 impl<'a> RenderWidget for BodyWidget {
     fn render(&mut self, f: &mut Frame, layout: MainLayoutUI) {
         trace!("rendering widget with data {:?}", self.widget.data.clone());
-        match &self.widget.title {
+        match self.widget.title.clone() {
             Some(title) => {
-                let rect = layout.get_body_rect(f);
-                if self.black {
-                    f.render_widget(
-                        self.widget
-                            .content_in_black(
-                                title.to_string(),
-                                self.widget.data.get("logs").unwrap().text.clone(),
-                                rect[self.widget.pos],
-                            )
-                            .unwrap_or_default(),
-                        rect[self.widget.pos],
-                    );
-                } else {
-                    f.render_widget(
-                        self.widget
-                            .content_in_white(
-                                title.to_string(),
-                                self.widget.data.get("logs").unwrap().text.clone(),
-                                rect[self.widget.pos],
-                            )
-                            .unwrap_or_default(),
-                        rect[self.widget.pos],
-                    );
+                if let Some(logs) = self.get_data().data.get("logs") {
+                    let rect = layout.get_body_rect(f);
+                    if self.black {
+                        f.render_widget(
+                            self.widget
+                                .content_in_black(
+                                    title.to_string(),
+                                    logs.clone(),
+                                    rect[self.widget.pos],
+                                )
+                                .unwrap_or_default(),
+                            rect[self.widget.pos],
+                        );
+                    } else {
+                        f.render_widget(
+                            self.widget
+                                .content_in_white(
+                                    title.to_string(),
+                                    self.widget.data.clone().data.get("logs").unwrap().clone(),
+                                    rect[self.widget.pos],
+                                )
+                                .unwrap_or_default(),
+                            rect[self.widget.pos],
+                        );
+                    }
                 }
             }
             None => {}
         }
     }
 
-    fn get_data(&mut self, key: String) -> CliWidgetData {
-        self.widget.data.get(&key).unwrap().clone()
+    fn get_data(&mut self) -> CliWidgetData {
+        self.widget.data.clone()
     }
 
-    fn set_thread_started(&mut self, key: String, started: bool) {
-        self.widget.data.get_mut(&key).unwrap().thread_started = started
+    fn set_thread_started(&mut self, started: bool) {
+        self.widget.data.thread_started = started
     }
 
-    fn set_text_data(
-        &mut self,
-        key: String,
-        text: Option<String>,
-    ) -> HashMap<String, CliWidgetData> {
-        self.widget.data.get_mut(&key).unwrap().text = text;
+    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData {
+        self.widget.data.data.insert(key, Some(text.clone()));
+        self.widget.data.clone()
+    }
+
+    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
+        self.widget.data.clone().data.insert(key, None);
         self.widget.data.clone()
     }
 }
 
-impl BodyWidget {
-    pub fn new(black: bool, widget: CliWidget) -> Self {
-        BodyWidget { black, widget }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct CliWidget {
-    pub id: CliWidgetId,
-    pub title: Option<String>,
-    pub data: HashMap<String, CliWidgetData>,
-    pub pos: usize,
-    is_selected: bool,
-}
-
 impl<'a> CliWidget {
-    pub fn bordered(
-        id: CliWidgetId,
-        title: String,
-        pos: usize,
-        data: HashMap<String, CliWidgetData>,
-    ) -> Self {
+    pub fn bordered(id: CliWidgetId, title: String, pos: usize, data: CliWidgetData) -> Self {
         CliWidget {
             id,
             title: Some(title),
@@ -221,7 +236,7 @@ impl<'a> CliWidget {
         }
     }
 
-    pub fn unbordered(id: CliWidgetId, data: HashMap<String, CliWidgetData>) -> Self {
+    pub fn unbordered(id: CliWidgetId, data: CliWidgetData) -> Self {
         CliWidget {
             id,
             title: None,
@@ -295,4 +310,67 @@ impl<'a> CliWidget {
         }
         scroll_to
     }
+}
+
+pub fn create_header_widget_data<'a>() -> HeaderWidget {
+    let login_info_data = CliWidgetData::new(CliWidgetId::Header);
+    HeaderWidget::new(CliWidget::unbordered(CliWidgetId::Header, login_info_data))
+}
+
+pub fn create_login_widget_data<'a>() -> BodyWidget {
+    let cli_widget_data = CliWidgetData {
+        id: CliWidgetId::GetLoginLogs,
+        thread_started: false,
+        initiate_thread: None,
+        data: HashMap::default(),
+    };
+    BodyWidget::new(
+        false,
+        CliWidget::bordered(
+            CliWidgetId::GetLoginLogs,
+            "Logging in...".to_string(),
+            0,
+            cli_widget_data,
+        ),
+    )
+}
+
+pub fn create_logs_widget_data<'a>() -> BodyWidget {
+    let cli_widget_data = CliWidgetData {
+        id: CliWidgetId::GetLogs,
+        thread_started: false,
+        initiate_thread: Some(|a| {
+            a.send(TUIAction::GetLogs).unwrap();
+        }),
+        data: HashMap::default(),
+    };
+    BodyWidget::new(
+        true,
+        CliWidget::bordered(
+            CliWidgetId::GetLogs,
+            "Salespoint Logs".to_string(),
+            0,
+            cli_widget_data,
+        ),
+    )
+}
+
+pub fn create_pods_widget_data<'a>() -> BodyWidget {
+    let cli_widget_data = CliWidgetData {
+        id: CliWidgetId::GetPods,
+        thread_started: false,
+        initiate_thread: Some(|a| {
+            a.send(TUIAction::GetPods).unwrap();
+        }),
+        data: HashMap::default(),
+    };
+    BodyWidget::new(
+        true,
+        CliWidget::bordered(
+            CliWidgetId::GetPods,
+            "Salespoint pods".to_string(),
+            1,
+            cli_widget_data,
+        ),
+    )
 }

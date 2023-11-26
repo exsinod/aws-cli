@@ -1,6 +1,24 @@
-use std::sync::mpsc::Sender;
+use std::{collections::HashMap, sync::mpsc::Sender};
 
 use crate::widgets::{BodyWidget, CliWidgetId, HeaderWidget};
+
+pub const DEV: KubeEnvData =
+    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "shared-non-prod-2");
+pub const PROD: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "shared-prod-2");
+
+pub struct KubeEnvData<'a> {
+    pub profile: &'a str,
+    pub environment: &'a str,
+}
+
+impl<'a> KubeEnvData<'a> {
+    pub const fn new(profile: &'a str, environment: &'a str) -> Self {
+        KubeEnvData {
+            profile,
+            environment,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -39,12 +57,17 @@ pub struct CliWidgetData {
     pub id: CliWidgetId,
     pub thread_started: bool,
     pub initiate_thread: Option<fn(action_tx: Sender<TUIAction>)>,
-    pub text: Option<String>,
+    pub data: HashMap<String, Option<String>>,
 }
 
 impl CliWidgetData {
     pub fn new(id: CliWidgetId) -> Self {
-        CliWidgetData { id, thread_started: false, initiate_thread: None, text: None }
+        CliWidgetData {
+            id,
+            thread_started: false,
+            initiate_thread: None,
+            data: HashMap::default(),
+        }
     }
 }
 
@@ -101,28 +124,8 @@ pub enum Direction2 {
     Down,
 }
 
-pub const DEV: KubeEnvData = KubeEnvData::new(
-    "eks-non-prod-myccv-lab-developer",
-    "shared-non-prod-2",
-);
-pub const PROD: KubeEnvData = KubeEnvData::new(
-    "eks-prod-myccv-lab-developer",
-    "shared-prod-2",
-);
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum KubeEnv {
-    Dev, Prod,
+    Dev,
+    Prod,
 }
-
-pub struct KubeEnvData<'a> {
-    pub profile: &'a str,
-    pub environment: &'a str,
-}
-
-impl<'a> KubeEnvData<'a> {
-    pub const fn new(profile: &'a str, environment: &'a str) -> Self {
-        KubeEnvData { profile, environment}
-    }
-}
-

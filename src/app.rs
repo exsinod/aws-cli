@@ -14,19 +14,22 @@ use ratatui::{
 };
 
 use crate::{
-    structs::{Direction2, Store, TUIAction, TUIError, TUIEvent, UserInput, KubeEnv},
+    structs::{Direction2, KubeEnv, Store, TUIAction, TUIError, TUIEvent, UserInput},
     ui::{MainLayoutUI, SingleLayoutUI, UI},
-    widgets::{RenderWidget, CliWidgetId},
+    widgets::{CliWidgetId, RenderWidget},
 };
 
 struct ThreadManage {
-        logs_thread_started: bool,
-        login_logs_thread_started: bool,
+    logs_thread_started: bool,
+    pods_thread_started: bool,
 }
 
 impl ThreadManage {
     fn new(logs_thread_started: bool, login_logs_thread_started: bool) -> Self {
-        ThreadManage { logs_thread_started, login_logs_thread_started }
+        ThreadManage {
+            logs_thread_started,
+            pods_thread_started: login_logs_thread_started,
+        }
     }
 }
 
@@ -62,26 +65,34 @@ impl<'a, B: Backend> App<'a, B> {
         let mut store: Option<Store> = None;
         let logs_thread_started = false;
         let login_logs_thread_started = false;
-        self.thread_mngt = Some(ThreadManage::new(logs_thread_started, login_logs_thread_started));
+        self.thread_mngt = Some(ThreadManage::new(
+            logs_thread_started,
+            login_logs_thread_started,
+        ));
 
         while let false = should_quit {
             while let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(20)) {
                 store = Some(updated_store.clone());
                 let mut ui = UI::main(&MainLayoutUI::new());
-                ui.widgets.push(Box::new(updated_store.clone().header_widget.unwrap()));
+                ui.widgets
+                    .push(Box::new(updated_store.clone().header_widget.unwrap()));
                 self.initiate_threads(updated_store.clone());
                 if updated_store
                     .clone()
                     .login_widget
                     .unwrap()
-                    .get_data("logs".to_string())
-                    .text
+                    .get_data()
+                    .data
+                    .get("text")
                     .is_some()
                 {
-                    ui.widgets.push(Box::new(updated_store.login_widget.unwrap()));
+                    ui.widgets
+                        .push(Box::new(updated_store.login_widget.unwrap()));
                 } else if updated_store.logged_in {
-                    ui.widgets.push(Box::new(updated_store.pods_widget.unwrap()));
-                    ui.widgets.push(Box::new(updated_store.logs_widget.unwrap()));
+                    ui.widgets
+                        .push(Box::new(updated_store.pods_widget.unwrap()));
+                    ui.widgets
+                        .push(Box::new(updated_store.logs_widget.unwrap()));
                 } else if updated_store.request_login {
                     ui = UI::single(&SingleLayoutUI::new());
                     ui.widget_fn = Some(|f, layout| {
@@ -144,16 +155,18 @@ impl<'a, B: Backend> App<'a, B> {
     fn initiate_threads(&mut self, updated_store: Store) {
         if updated_store.logged_in {
             if !self.thread_mngt.as_mut().unwrap().logs_thread_started {
-                    self.event_tx
-                        .send(TUIEvent::LogThreadStarted(CliWidgetId::GetLogs))
-                        .unwrap();
-                    self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
+                debug!("initiate logs thread");
+                self.event_tx
+                    .send(TUIEvent::LogThreadStarted(CliWidgetId::GetLogs))
+                    .unwrap();
+                self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
             }
-            if !self.thread_mngt.as_mut().unwrap().login_logs_thread_started {
-                    self.event_tx
-                        .send(TUIEvent::LogThreadStarted(CliWidgetId::GetPods))
-                        .unwrap();
-                    self.thread_mngt.as_mut().unwrap().login_logs_thread_started = true;
+            if !self.thread_mngt.as_mut().unwrap().pods_thread_started {
+                debug!("initiate pods thread");
+                self.event_tx
+                    .send(TUIEvent::LogThreadStarted(CliWidgetId::GetPods))
+                    .unwrap();
+                self.thread_mngt.as_mut().unwrap().pods_thread_started = true;
             }
         }
     }
@@ -231,7 +244,7 @@ impl<'a, B: Backend> App<'a, B> {
             Some(UserInput::Quit)
         } else if let KeyCode::Char('E') = keycode {
             Some(UserInput::ChangeEnv)
-        }else {
+        } else {
             None
         };
     }

@@ -17,11 +17,12 @@ use log4rs::{
     Config,
 };
 use ratatui::{layout::Direction, prelude::CrosstermBackend, Terminal};
-use structs::{Store, TUIAction, TUIEvent};
-use widget_data_store::{
-    create_header_widget_data, create_login_widget_data, create_logs_widget_data, WidgetDataStore,
+use structs::{KubeEnv, Store, TUIAction, TUIEvent};
+use widget_data_store::WidgetDataStore;
+use widgets::{
+    create_header_widget_data, create_login_widget_data, create_logs_widget_data,
+    create_pods_widget_data, CliWidgetId,
 };
-use widgets::CliWidgetId;
 
 use std::{
     error::Error,
@@ -59,6 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             create_header_widget_data(),
             create_login_widget_data(),
             create_logs_widget_data(),
+            create_pods_widget_data(),
         )
     });
 
@@ -66,6 +68,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::spawn(move || {
         action_handler::start(event_tx_clone.clone(), action_rx);
     });
+
+    // init state
+    event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
 
     // create app and run it
     let res = App::new(&mut terminal, store_rx, event_tx, action_tx).run_app();

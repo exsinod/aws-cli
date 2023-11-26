@@ -50,7 +50,11 @@ impl<'a> MainLayoutUI<'a> {
     pub fn get_body_rect(&self, f: &mut Frame<'_>) -> Rc<[Rect]> {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Max(1), Constraint::Max(1), Constraint::Percentage(90)])
+            .constraints(vec![
+                Constraint::Max(1),
+                Constraint::Max(1),
+                Constraint::Percentage(90),
+            ])
             .split(f.size());
         Layout::default()
             .direction(Direction::Horizontal)
@@ -61,7 +65,11 @@ impl<'a> MainLayoutUI<'a> {
     pub fn get_header_rect(&self, line: usize, f: &mut Frame<'_>) -> Rc<[Rect]> {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Max(1), Constraint::Max(1), Constraint::Percentage(90)])
+            .constraints(vec![
+                Constraint::Max(1),
+                Constraint::Max(1),
+                Constraint::Percentage(90),
+            ])
             .split(f.size());
         Layout::default()
             .direction(Direction::Horizontal)
