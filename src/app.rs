@@ -5,7 +5,7 @@ use std::{
 };
 
 use crossterm::event::{self, Event, KeyCode};
-use log::debug;
+use log::{debug, trace};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::{
-    structs::{Direction2, KubeEnv, Store, TUIAction, TUIError, TUIEvent, UserInput},
+    structs::{Direction2, KubeEnv, Store, TUIError, TUIEvent, UserInput},
     ui::{MainLayoutUI, SingleLayoutUI, UI},
     widgets::{CliWidgetId, RenderWidget},
 };
@@ -41,7 +41,7 @@ where
     store_rx: Receiver<Store>,
     event_tx: Sender<TUIEvent>,
     thread_mngt: Option<ThreadManage>,
-    _action_tx: Sender<TUIAction>,
+    extended_keymap: Vec<fn(KeyCode)>,
 }
 
 impl<'a, B: Backend> App<'a, B> {
@@ -49,14 +49,14 @@ impl<'a, B: Backend> App<'a, B> {
         terminal: &'a mut Terminal<B>,
         store_rx: Receiver<Store>,
         event_tx: Sender<TUIEvent>,
-        _action_tx: Sender<TUIAction>,
+        extended_keymap: Vec<fn(KeyCode)>,
     ) -> Self {
         App {
             terminal,
             store_rx,
             event_tx,
             thread_mngt: None,
-            _action_tx,
+            extended_keymap,
         }
     }
 
@@ -72,6 +72,7 @@ impl<'a, B: Backend> App<'a, B> {
 
         while let false = should_quit {
             while let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(20)) {
+                trace!("got store {:?}", updated_store);
                 store = Some(updated_store.clone());
                 let mut ui = UI::main(&MainLayoutUI::new());
                 ui.widgets
@@ -83,7 +84,7 @@ impl<'a, B: Backend> App<'a, B> {
                     .unwrap()
                     .get_data()
                     .data
-                    .get("text")
+                    .get("logs")
                     .is_some()
                 {
                     ui.widgets
@@ -115,7 +116,8 @@ impl<'a, B: Backend> App<'a, B> {
                 self.terminal.draw(|f| ui.ui(f)).unwrap();
             }
             if let Some(store) = store.as_ref() {
-                let user_input = self.handle_user_input(store.clone());
+                let user_input =
+                    self.handle_user_input(store.clone(), self.extended_keymap.clone());
                 if let Some(input) = user_input {
                     match input {
                         UserInput::Quit => {
@@ -171,7 +173,11 @@ impl<'a, B: Backend> App<'a, B> {
         }
     }
 
-    fn handle_user_input(&self, store: Store) -> Option<UserInput> {
+    fn handle_user_input(
+        &self,
+        store: Store,
+        extended_keymap: Vec<fn(KeyCode)>,
+    ) -> Option<UserInput> {
         let mut user_input: Option<UserInput> = None;
         if let Ok(true) = event::poll(Duration::from_millis(10)) {
             if let Ok(Event::Key(key)) = event::read() {
@@ -218,6 +224,9 @@ impl<'a, B: Backend> App<'a, B> {
                                 }
                             }
                         } else {
+                            for check in extended_keymap {
+                                check(key.code)
+                            }
                             match key.code {
                                 KeyCode::Null => {}
                                 _ => {

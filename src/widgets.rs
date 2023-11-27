@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{any::Any, collections::HashMap};
 
+use crossterm::event::KeyCode;
 use log::{debug, trace};
 use ratatui::{
     layout::{Alignment, Rect},
@@ -10,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    structs::{CliWidgetData, TUIAction},
+    structs::{CliWidgetData, Store, TUIAction, TUIEvent},
     ui::MainLayoutUI,
 };
 
@@ -19,14 +20,9 @@ pub enum CliWidgetId {
     #[default]
     Default,
     Header,
-    Login,
     GetLogs,
     GetLoginLogs,
     GetPods,
-}
-
-pub trait RenderWithWidgetData {
-    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI);
 }
 
 pub trait RenderWidget {
@@ -35,6 +31,7 @@ pub trait RenderWidget {
     fn set_thread_started(&mut self, started: bool);
     fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData;
     fn clear_text_data(&mut self, key: String) -> CliWidgetData;
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -168,6 +165,10 @@ impl<'a> RenderWidget for HeaderWidget {
         self.widget.data.clone().data.insert(key, None);
         self.widget.data.clone()
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl<'a> RenderWidget for BodyWidget {
@@ -223,6 +224,10 @@ impl<'a> RenderWidget for BodyWidget {
         self.widget.data.clone().data.insert(key, None);
         self.widget.data.clone()
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl<'a> CliWidget {
@@ -270,7 +275,6 @@ impl<'a> CliWidget {
                     )
                     .style(Style::new().fg(fg_color).bg(bg_color))
                     .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: false }),
             )
         } else {
             None
@@ -290,7 +294,7 @@ impl<'a> CliWidget {
                     .block(Block::new().title(title).borders(Borders::ALL))
                     .style(Style::new().bg(Color::White).fg(Color::Black))
                     .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: false }),
+                    .wrap(Wrap { trim: true }),
             )
         } else {
             None
@@ -311,32 +315,57 @@ impl<'a> CliWidget {
         scroll_to
     }
 }
-
-pub fn create_header_widget_data<'a>() -> HeaderWidget {
-    let login_info_data = CliWidgetData::new(CliWidgetId::Header);
-    HeaderWidget::new(CliWidget::unbordered(CliWidgetId::Header, login_info_data))
+fn add_to_widget_data<'a>(widget: &mut BodyWidget, text: String) -> &mut BodyWidget {
+    if let Some(Some(existing_test)) = &mut widget.get_data().data.get_mut("logs") {
+        existing_test.push_str(text.as_str());
+        widget.set_text_data("logs".to_string(), existing_test.to_string());
+    } else {
+        widget.set_text_data("logs".to_string(), text);
+    }
+    widget
 }
 
-pub fn create_login_widget_data<'a>() -> BodyWidget {
-    let cli_widget_data = CliWidgetData {
+pub fn create_header_widget_data<'a>() -> WidgetDescription<HeaderWidget> {
+    let header_data = CliWidgetData::new(CliWidgetId::Header);
+    let header_widget = HeaderWidget::new(CliWidget::unbordered(CliWidgetId::Header, header_data));
+    WidgetDescription {
+        widget: header_widget,
+        event_handler: |_, _| {},
+        keymap: |_| {},
+    }
+}
+
+pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let login_widget_data = CliWidgetData {
         id: CliWidgetId::GetLoginLogs,
         thread_started: false,
         initiate_thread: None,
         data: HashMap::default(),
     };
-    BodyWidget::new(
+    let login_widget = BodyWidget::new(
         false,
         CliWidget::bordered(
             CliWidgetId::GetLoginLogs,
             "Logging in...".to_string(),
             0,
-            cli_widget_data,
+            login_widget_data,
         ),
-    )
+    );
+    let login_event_handler = |event: &TUIEvent, store: &mut Store| match event {
+        TUIEvent::AddLoginLog(log_part) => {
+            add_to_widget_data(store.login_widget.as_mut().unwrap(), log_part.to_string());
+        }
+        _ => {}
+    };
+    WidgetDescription {
+        widget: login_widget,
+        event_handler: login_event_handler,
+        keymap: |_| {},
+    }
 }
 
-pub fn create_logs_widget_data<'a>() -> BodyWidget {
-    let cli_widget_data = CliWidgetData {
+pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let logs_widget_data = CliWidgetData {
         id: CliWidgetId::GetLogs,
         thread_started: false,
         initiate_thread: Some(|a| {
@@ -344,19 +373,30 @@ pub fn create_logs_widget_data<'a>() -> BodyWidget {
         }),
         data: HashMap::default(),
     };
-    BodyWidget::new(
+    let logs_widget = BodyWidget::new(
         true,
         CliWidget::bordered(
             CliWidgetId::GetLogs,
             "Salespoint Logs".to_string(),
             0,
-            cli_widget_data,
+            logs_widget_data,
         ),
-    )
+    );
+    let logs_event_handler = |event: &TUIEvent, store: &mut Store| match event {
+        TUIEvent::AddLog(log_part) => {
+            add_to_widget_data(store.logs_widget.as_mut().unwrap(), log_part.to_string());
+        }
+        _ => {}
+    };
+    WidgetDescription {
+        widget: logs_widget,
+        event_handler: logs_event_handler,
+        keymap: |_| {},
+    }
 }
 
-pub fn create_pods_widget_data<'a>() -> BodyWidget {
-    let cli_widget_data = CliWidgetData {
+pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let pods_widget_data = CliWidgetData {
         id: CliWidgetId::GetPods,
         thread_started: false,
         initiate_thread: Some(|a| {
@@ -364,13 +404,51 @@ pub fn create_pods_widget_data<'a>() -> BodyWidget {
         }),
         data: HashMap::default(),
     };
-    BodyWidget::new(
+    let pods_widget = BodyWidget::new(
         true,
         CliWidget::bordered(
             CliWidgetId::GetPods,
             "Salespoint pods".to_string(),
             1,
-            cli_widget_data,
+            pods_widget_data,
         ),
-    )
+    );
+    let pods_event_handler = |event: &TUIEvent, store: &mut Store| match event {
+        TUIEvent::AddPods(pods) => {
+            add_to_widget_data(store.pods_widget.as_mut().unwrap(), pods.to_string());
+        }
+        _ => {}
+    };
+    WidgetDescription {
+        widget: pods_widget,
+        event_handler: pods_event_handler,
+        keymap: |_| {},
+    }
+}
+
+#[derive(Clone)]
+pub struct WidgetDescription<T>
+where
+    T: RenderWidget,
+{
+    widget: T,
+    event_handler: fn(&TUIEvent, &mut Store),
+    keymap: fn(KeyCode),
+}
+
+impl<T> WidgetDescription<T>
+where
+    T: RenderWidget,
+{
+    pub fn get_widget(&self) -> &T {
+        &self.widget
+    }
+
+    pub fn get_event_handler(&self) -> fn(&TUIEvent, &mut Store) {
+        self.event_handler
+    }
+
+    pub fn get_keymap(&self) -> fn(KeyCode) {
+        self.keymap
+    }
 }

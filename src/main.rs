@@ -1,12 +1,13 @@
 mod action_handler;
 mod app;
 mod structs;
+mod truncator;
 mod ui;
 mod widget_data_store;
 mod widgets;
 use app::App;
 use crossterm::{
-    event::DisableMouseCapture,
+    event::{DisableMouseCapture, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -18,6 +19,7 @@ use log4rs::{
 };
 use ratatui::{layout::Direction, prelude::CrosstermBackend, Terminal};
 use structs::{KubeEnv, Store, TUIAction, TUIEvent};
+use truncator::SimpleTruncator;
 use widget_data_store::WidgetDataStore;
 use widgets::{
     create_header_widget_data, create_login_widget_data, create_logs_widget_data,
@@ -48,21 +50,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
 
-    // clone to move in to event thread
-    let action_tx_clone = action_tx.clone();
-    let event_tx_clone = event_tx.clone();
+    // truncator
+    let truncator = Box::new(SimpleTruncator::new());
 
-    // event thread
+    // widgets
+    let header_widget_data = create_header_widget_data();
+    let login_widget_data = create_login_widget_data();
+    let logs_widget_data = create_logs_widget_data();
+    let pods_widget_data = create_pods_widget_data();
+
+    // store
+    let mut store = Store::new(
+        header_widget_data.get_widget().clone(),
+        login_widget_data.get_widget().clone(),
+        logs_widget_data.get_widget().clone(),
+        pods_widget_data.get_widget().clone(),
+    );
+
+    // widget data store
     thread::spawn(move || {
-        let widget_data_store =
-            WidgetDataStore::new(event_rx, store_tx.clone(), action_tx_clone.clone());
+        let mut widget_data_store =
+            WidgetDataStore::new(event_rx, &mut store, store_tx.clone(), action_tx, truncator);
+
         widget_data_store.start(
-            create_header_widget_data(),
-            create_login_widget_data(),
-            create_logs_widget_data(),
-            create_pods_widget_data(),
+            login_widget_data.get_event_handler(),
+            logs_widget_data.get_event_handler(),
+            pods_widget_data.get_event_handler(),
         )
     });
+
+    // clone to move in to action thread
+    let event_tx_clone = event_tx.clone();
 
     // action thread
     thread::spawn(move || {
@@ -72,8 +90,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // init state
     event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
 
+    // package the extended keymaps in a Vec
+    let mut extended_keymap: Vec<fn(KeyCode)> = vec![];
+    extended_keymap.push(header_widget_data.get_keymap());
+
     // create app and run it
-    let res = App::new(&mut terminal, store_rx, event_tx, action_tx).run_app();
+    let res = App::new(&mut terminal, store_rx, event_tx, extended_keymap).run_app();
 
     // restore terminal
     disable_raw_mode()?;

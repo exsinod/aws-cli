@@ -13,7 +13,7 @@ use log::{debug, trace};
 use regex::Regex;
 
 use crate::structs::{KubeEnv, KubeEnvData, TUIError, DEV, PROD};
-use crate::{init_logging, TUIAction, TUIEvent};
+use crate::{TUIAction, TUIEvent};
 
 pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
     let mut logs_thread = false;
@@ -417,7 +417,7 @@ fn add_logs(event_tx: Sender<TUIEvent>, line: String) {
 
 #[test]
 fn test_login_succeed() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let child = Command::new("sh")
         .arg("-C")
@@ -456,7 +456,7 @@ fn test_login_succeed() {
 
 #[test]
 fn test_login_fail() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let child = Command::new("sh")
         .arg("-C")
@@ -484,7 +484,7 @@ fn test_login_fail() {
 
 #[test]
 fn test_open_log_channel() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let mut error = None;
 
@@ -519,7 +519,7 @@ fn test_open_log_channel() {
 
 #[test]
 fn test_get_logs() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     let (_, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
 
@@ -565,7 +565,7 @@ TUIEvent::AddLog("Nullam volutpat magna ut leo auctor, sollicitudin pharetra tel
 
 #[test]
 fn test_wait_with_output_timeout() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let child = Command::new("sh")
         .arg("-C")
         .arg("test_res/check_connectivity.sh")
@@ -594,7 +594,7 @@ fn test_wait_with_output_timeout() {
 
 #[test]
 fn test_wait_with_output_timeout_fail() {
-    init_logging().unwrap();
+    crate::init_logging().unwrap();
     let child = Command::new("sh")
         .arg("-C")
         .arg("test_res/check_connectivity_fail.sh")

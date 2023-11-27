@@ -36,7 +36,7 @@ impl Store {
     pub fn new(
         header_widget: HeaderWidget,
         login_widget: BodyWidget,
-        body_widget: BodyWidget,
+        logs_widget: BodyWidget,
         pods_widget: BodyWidget,
     ) -> Store {
         Store {
@@ -46,7 +46,7 @@ impl Store {
             login_code: None,
             header_widget: Some(header_widget),
             login_widget: Some(login_widget),
-            logs_widget: Some(body_widget),
+            logs_widget: Some(logs_widget),
             pods_widget: Some(pods_widget),
         }
     }
