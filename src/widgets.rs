@@ -1,4 +1,7 @@
-use std::{any::Any, collections::HashMap};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet, LinkedList},
+};
 
 use crossterm::event::KeyCode;
 use log::{debug, trace};
@@ -9,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use regex::Regex;
 
 use crate::{
     structs::{CliWidgetData, Store, TUIAction, TUIEvent},
@@ -29,7 +33,7 @@ pub trait RenderWidget {
     fn render(&mut self, f: &mut Frame, layout: MainLayoutUI);
     fn get_data(&mut self) -> CliWidgetData;
     fn set_thread_started(&mut self, started: bool);
-    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData;
+    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData;
     fn clear_text_data(&mut self, key: String) -> CliWidgetData;
     fn as_any(&self) -> &dyn Any;
 }
@@ -118,7 +122,7 @@ impl<'a> RenderWidget for HeaderWidget {
                     .clone()
                     .data
                     .get("error")
-                    .and_then(|d| d.clone()),
+                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
             ),
             rect[0],
         );
@@ -130,7 +134,7 @@ impl<'a> RenderWidget for HeaderWidget {
                     .clone()
                     .data
                     .get("login_info")
-                    .and_then(|d| d.clone()),
+                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
             ),
             rect[1],
         );
@@ -142,7 +146,7 @@ impl<'a> RenderWidget for HeaderWidget {
                     .clone()
                     .data
                     .get("kube_info")
-                    .and_then(|d| d.clone()),
+                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
             ),
             rect[0],
         );
@@ -156,7 +160,7 @@ impl<'a> RenderWidget for HeaderWidget {
         self.widget.data.thread_started = started
     }
 
-    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData {
+    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
         self.widget.data.data.insert(key, Some(text));
         self.widget.data.clone()
     }
@@ -215,8 +219,8 @@ impl<'a> RenderWidget for BodyWidget {
         self.widget.data.thread_started = started
     }
 
-    fn set_text_data(&mut self, key: String, text: String) -> CliWidgetData {
-        self.widget.data.data.insert(key, Some(text.clone()));
+    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
+        self.widget.data.data.insert(key, Some(text));
         self.widget.data.clone()
     }
 
@@ -254,7 +258,7 @@ impl<'a> CliWidget {
     fn content_in_black(
         &self,
         title: String,
-        logs: Option<String>,
+        logs: Option<Vec<String>>,
         rect: Rect,
     ) -> Option<Paragraph<'a>> {
         let bg_color = Color::Black;
@@ -265,8 +269,8 @@ impl<'a> CliWidget {
         };
         if let Some(log) = logs {
             Some(
-                Paragraph::new(log.to_string())
-                    .scroll((Self::calculate_scroll(log, rect), 0))
+                Paragraph::new(log.join(""))
+                    .scroll((Self::calculate_scroll(log, rect), 50))
                     .block(
                         Block::new()
                             .title(title)
@@ -275,6 +279,7 @@ impl<'a> CliWidget {
                     )
                     .style(Style::new().fg(fg_color).bg(bg_color))
                     .alignment(Alignment::Left)
+                    .wrap(Wrap { trim: false }),
             )
         } else {
             None
@@ -284,12 +289,12 @@ impl<'a> CliWidget {
     fn content_in_white(
         &self,
         title: String,
-        logs: Option<String>,
+        logs: Option<Vec<String>>,
         rect: Rect,
     ) -> Option<Paragraph<'a>> {
         if let Some(log) = logs {
             Some(
-                Paragraph::new(log.to_string())
+                Paragraph::new(log.join("\n"))
                     .scroll((Self::calculate_scroll(log, rect), 0))
                     .block(Block::new().title(title).borders(Borders::ALL))
                     .style(Style::new().bg(Color::White).fg(Color::Black))
@@ -301,11 +306,17 @@ impl<'a> CliWidget {
         }
     }
 
-    fn calculate_scroll(lines: String, estate: Rect) -> u16 {
+    fn calculate_scroll(lines: Vec<String>, estate: Rect) -> u16 {
         let mut scroll_to: u16 = 0;
-
-        let lines = lines.matches("\n").count();
-        scroll_to = scroll_to + lines as u16;
+        for line in lines {
+            let new_lines = line.chars().filter(|c| c.eq(&'\n')).count();
+            let estate_space = line.len() as u16 / estate.width;
+            if new_lines as u16 > estate_space {
+                scroll_to += new_lines as u16 + 1;
+            } else {
+                scroll_to += estate_space + 1;
+            }
+        }
         let height = estate.height - 4;
         if height > scroll_to {
             scroll_to = 0;
@@ -315,12 +326,13 @@ impl<'a> CliWidget {
         scroll_to
     }
 }
+
 fn add_to_widget_data<'a>(widget: &mut BodyWidget, text: String) -> &mut BodyWidget {
     if let Some(Some(existing_test)) = &mut widget.get_data().data.get_mut("logs") {
-        existing_test.push_str(text.as_str());
-        widget.set_text_data("logs".to_string(), existing_test.to_string());
+        existing_test.push(text);
+        widget.set_data("logs".to_string(), existing_test.to_vec());
     } else {
-        widget.set_text_data("logs".to_string(), text);
+        widget.set_data("logs".to_string(), vec![text]);
     }
     widget
 }

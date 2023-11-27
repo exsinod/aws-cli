@@ -61,11 +61,10 @@ impl<'a> WidgetDataStore<'a> {
                         .send(TUIAction::ChangeEnv(env.clone()))
                         .unwrap();
                     self.store.env_change_possible = false;
-                    self.store
-                        .header_widget
-                        .as_mut()
-                        .unwrap()
-                        .set_text_data("kube_info".to_string(), format!("{:?}", env).to_string());
+                    self.store.header_widget.as_mut().unwrap().set_data(
+                        "kube_info".to_string(),
+                        vec![format!("{:?}", env).to_string()],
+                    );
                     self.send();
                 }
                 TUIEvent::Error(error) => match error {
@@ -74,7 +73,7 @@ impl<'a> WidgetDataStore<'a> {
                             .header_widget
                             .as_mut()
                             .unwrap()
-                            .set_text_data("error".to_string(), "Uhm... VPN on ?".to_string());
+                            .set_data("error".to_string(), vec!["Uhm... VPN on ?".to_string()]);
                         self.send();
                     }
                     TUIError::KEY(error) | TUIError::API(error) => {
@@ -82,7 +81,7 @@ impl<'a> WidgetDataStore<'a> {
                             .header_widget
                             .as_mut()
                             .unwrap()
-                            .set_text_data("error".to_string(), error);
+                            .set_data("error".to_string(), vec![error]);
                         self.send();
                     }
                 },
@@ -132,7 +131,7 @@ impl<'a> WidgetDataStore<'a> {
                         .header_widget
                         .as_mut()
                         .unwrap()
-                        .set_text_data("login_info".to_string(), "LOGGED IN".to_string());
+                        .set_data("login_info".to_string(), vec!["LOGGED IN".to_string()]);
                     self.send();
                 }
                 TUIEvent::DisplayLoginCode(code) => {
@@ -245,7 +244,7 @@ fn test_error_events() {
                 .get_data()
                 .data
                 .get("error")
-                == Some(Some("Uhm... VPN on ?".to_string())).as_ref(),
+                == Some(Some(vec!["Uhm... VPN on ?".to_string()])).as_ref(),
             "store was: {:?}",
             updated_store
         )
@@ -279,7 +278,7 @@ fn test_error_events() {
                 .get_data()
                 .data
                 .get("error")
-                == Some(Some("this errored".to_string())).as_ref(),
+                == Some(Some(vec!["this errored".to_string()])).as_ref(),
             "store was: {:?}",
             updated_store
         )
@@ -448,7 +447,7 @@ fn test_add_log_event() {
                 .get_data()
                 .data
                 .get("logs")
-                == Some(Some("this is a new line\n".to_string())).as_ref(),
+                == Some(Some(vec!["this is a new line\n".to_string()])).as_ref(),
             "store was: {:?}",
             updated_store
         )
@@ -467,7 +466,11 @@ fn test_add_log_event() {
                 .get_data()
                 .data
                 .get("logs")
-                == Some(Some("this is a new line\nand some extra.".to_string())).as_ref(),
+                == Some(Some(vec![
+                    "this is a new line\n".to_string(),
+                    "and some extra.".to_string()
+                ]))
+                .as_ref(),
             "store was: {:?}",
             updated_store
         )
