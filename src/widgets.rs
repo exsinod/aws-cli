@@ -1,7 +1,4 @@
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet, LinkedList},
-};
+use std::collections::HashMap;
 
 use crossterm::event::KeyCode;
 use log::{debug, trace};
@@ -12,7 +9,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
-use regex::Regex;
 
 use crate::{
     structs::{CliWidgetData, Store, TUIAction, TUIEvent},
@@ -27,15 +23,30 @@ pub enum CliWidgetId {
     GetLogs,
     GetLoginLogs,
     GetPods,
+    Tail,
 }
 
 pub trait RenderWidget {
     fn render(&mut self, f: &mut Frame, layout: MainLayoutUI);
-    fn get_data(&mut self) -> CliWidgetData;
-    fn set_thread_started(&mut self, started: bool);
-    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData;
-    fn clear_text_data(&mut self, key: String) -> CliWidgetData;
-    fn as_any(&self) -> &dyn Any;
+    fn get_widget(&mut self) -> &mut CliWidget;
+
+    fn get_data(&mut self) -> CliWidgetData {
+        self.get_widget().data.clone()
+    }
+
+    fn set_thread_started(&mut self, started: bool) {
+        self.get_widget().data.thread_started = started
+    }
+
+    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
+        self.get_widget().data.data.insert(key, Some(text));
+        self.get_widget().data.clone()
+    }
+
+    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
+        self.get_widget().data.clone().data.insert(key, None);
+        self.get_widget().data.clone()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -152,26 +163,8 @@ impl<'a> RenderWidget for HeaderWidget {
         );
     }
 
-    fn get_data(&mut self) -> CliWidgetData {
-        self.widget.data.clone()
-    }
-
-    fn set_thread_started(&mut self, started: bool) {
-        self.widget.data.thread_started = started
-    }
-
-    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
-        self.widget.data.data.insert(key, Some(text));
-        self.widget.data.clone()
-    }
-
-    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
-        self.widget.data.clone().data.insert(key, None);
-        self.widget.data.clone()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn get_widget(&mut self) -> &mut CliWidget {
+        &mut self.widget
     }
 }
 
@@ -211,26 +204,8 @@ impl<'a> RenderWidget for BodyWidget {
         }
     }
 
-    fn get_data(&mut self) -> CliWidgetData {
-        self.widget.data.clone()
-    }
-
-    fn set_thread_started(&mut self, started: bool) {
-        self.widget.data.thread_started = started
-    }
-
-    fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
-        self.widget.data.data.insert(key, Some(text));
-        self.widget.data.clone()
-    }
-
-    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
-        self.widget.data.clone().data.insert(key, None);
-        self.widget.data.clone()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn get_widget(&mut self) -> &mut CliWidget {
+        &mut self.widget
     }
 }
 
@@ -438,22 +413,47 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     }
 }
 
+pub fn create_tail_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let tail_widget_data = CliWidgetData {
+        id: CliWidgetId::Tail,
+        thread_started: false,
+        initiate_thread: Some(|a| {
+            a.send(TUIAction::GetTail).unwrap();
+        }),
+        data: HashMap::default(),
+    };
+    let tail_widget = BodyWidget::new(
+        true,
+        CliWidget::bordered(
+            CliWidgetId::Tail,
+            "cli logs".to_string(),
+            1,
+            tail_widget_data,
+        ),
+    );
+    let tail_event_handler = |event: &TUIEvent, store: &mut Store| match event {
+        TUIEvent::AddTailLog(tail_log) => {
+            add_to_widget_data(store.tail_widget.as_mut().unwrap(), tail_log.to_string());
+        }
+        _ => {}
+    };
+    WidgetDescription {
+        widget: tail_widget,
+        event_handler: tail_event_handler,
+        keymap: |_| {},
+    }
+}
+
 #[derive(Clone)]
-pub struct WidgetDescription<T>
-where
-    T: RenderWidget,
-{
+pub struct WidgetDescription<T: RenderWidget + Clone> {
     widget: T,
     event_handler: fn(&TUIEvent, &mut Store),
     keymap: fn(KeyCode),
 }
 
-impl<T> WidgetDescription<T>
-where
-    T: RenderWidget,
-{
-    pub fn get_widget(&self) -> &T {
-        &self.widget
+impl<T: RenderWidget + Clone> WidgetDescription<T> {
+    pub fn get_widget(&self) -> T {
+        self.widget.clone()
     }
 
     pub fn get_event_handler(&self) -> fn(&TUIEvent, &mut Store) {

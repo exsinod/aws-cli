@@ -19,11 +19,11 @@ use log4rs::{
 };
 use ratatui::{layout::Direction, prelude::CrosstermBackend, Terminal};
 use structs::{KubeEnv, Store, TUIAction, TUIEvent};
-use truncator::SimpleTruncator;
+use truncator::TopTruncator;
 use widget_data_store::WidgetDataStore;
 use widgets::{
     create_header_widget_data, create_login_widget_data, create_logs_widget_data,
-    create_pods_widget_data, CliWidgetId,
+    create_pods_widget_data, create_tail_widget_data, CliWidgetId,
 };
 
 use std::{
@@ -50,22 +50,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
 
-    // truncator
-    let truncator = Box::new(SimpleTruncator::new());
-
     // widgets
     let header_widget_data = create_header_widget_data();
     let login_widget_data = create_login_widget_data();
     let logs_widget_data = create_logs_widget_data();
     let pods_widget_data = create_pods_widget_data();
+    let tail_widget_data = create_tail_widget_data();
 
     // store
     let mut store = Store::new(
-        header_widget_data.get_widget().clone(),
-        login_widget_data.get_widget().clone(),
-        logs_widget_data.get_widget().clone(),
-        pods_widget_data.get_widget().clone(),
+        header_widget_data.get_widget(),
+        login_widget_data.get_widget(),
+        logs_widget_data.get_widget(),
+        pods_widget_data.get_widget(),
+        tail_widget_data.get_widget(),
     );
+
+    // truncator
+    let truncator = Box::new(TopTruncator::new(50));
 
     // widget data store
     thread::spawn(move || {
@@ -76,6 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             login_widget_data.get_event_handler(),
             logs_widget_data.get_event_handler(),
             pods_widget_data.get_event_handler(),
+            tail_widget_data.get_event_handler(),
         )
     });
 

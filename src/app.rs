@@ -22,13 +22,19 @@ use crate::{
 struct ThreadManage {
     logs_thread_started: bool,
     pods_thread_started: bool,
+    tail_thread_started: bool,
 }
 
 impl ThreadManage {
-    fn new(logs_thread_started: bool, login_logs_thread_started: bool) -> Self {
+    fn new(
+        logs_thread_started: bool,
+        pods_thread_started: bool,
+        tail_thread_started: bool,
+    ) -> Self {
         ThreadManage {
             logs_thread_started,
-            pods_thread_started: login_logs_thread_started,
+            pods_thread_started,
+            tail_thread_started,
         }
     }
 }
@@ -65,9 +71,11 @@ impl<'a, B: Backend> App<'a, B> {
         let mut store: Option<Store> = None;
         let logs_thread_started = false;
         let login_logs_thread_started = false;
+        let tail_thread_started = false;
         self.thread_mngt = Some(ThreadManage::new(
             logs_thread_started,
             login_logs_thread_started,
+            tail_thread_started,
         ));
 
         while let false = should_quit {
@@ -162,6 +170,13 @@ impl<'a, B: Backend> App<'a, B> {
                     .send(TUIEvent::LogThreadStarted(CliWidgetId::GetLogs))
                     .unwrap();
                 self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
+            }
+            if !self.thread_mngt.as_mut().unwrap().tail_thread_started {
+                debug!("initiate tail thread");
+                self.event_tx
+                    .send(TUIEvent::LogThreadStarted(CliWidgetId::Tail))
+                    .unwrap();
+                self.thread_mngt.as_mut().unwrap().tail_thread_started = true;
             }
             if !self.thread_mngt.as_mut().unwrap().pods_thread_started {
                 debug!("initiate pods thread");

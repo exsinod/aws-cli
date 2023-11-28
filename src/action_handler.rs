@@ -82,6 +82,15 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                     }
                 }
             }
+            TUIAction::GetTail => match get_tail(get_tail_command()) {
+                Ok(output) => {
+                    event_tx_clone.send(TUIEvent::AddTailLog(output)).unwrap();
+                }
+                Err(error) => {
+                    on_error(error, event_tx.clone());
+                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                }
+            },
         }
     }
 }
@@ -117,6 +126,15 @@ fn get_logs_command() -> Result<Child, Error> {
         .stderr(Stdio::piped())
         .spawn()
 }
+
+fn get_tail_command() -> Result<Child, Error> {
+    Command::new("cat")
+        .arg("logs.txt")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+}
+
 fn update_kubeconfig_command(kube_env: KubeEnvData) -> Result<Child, Error> {
     Command::new("aws")
         .arg("eks")
@@ -201,6 +219,10 @@ fn get_logs(
     } else {
         Err("process quit immediately".to_string())
     };
+}
+
+fn get_tail(child: Result<Child, std::io::Error>) -> Result<String, String> {
+    wait_for_output(child.unwrap())
 }
 
 fn wait_for_output_with_timeout(

@@ -1,50 +1,81 @@
-use crate::structs::Store;
+use std::time::SystemTime;
 
-pub trait Start {
-    fn start(&self);
+use log::debug;
+
+use crate::{structs::Store, widgets::RenderWidget};
+
+pub trait Truncatorix {
+    fn set_time(&mut self, now: SystemTime);
+    fn get_time(&self) -> SystemTime;
+    fn truncate(&mut self, store: &mut Store);
+    fn poll(&mut self) -> Option<()> {
+        if self.get_time().elapsed().unwrap().as_secs() > 5 {
+            self.set_time(SystemTime::now());
+            Some(())
+        } else {
+            None
+        }
+    }
+    fn start(&mut self) {
+        self.set_time(SystemTime::now())
+    }
 }
 
-pub trait Truncate {
-    fn truncate(&self);
+pub struct TopTruncator {
+    now: Option<SystemTime>,
+    from_to_top: i16,
 }
 
-pub trait Periodical {
-    fn poll(&self);
+impl TopTruncator {
+    pub fn new(from_to_top: i16) -> Self {
+        TopTruncator {
+            now: None,
+            from_to_top,
+        }
+    }
 }
 
-pub trait Update {
-    fn update(&self);
+impl Truncatorix for TopTruncator {
+    fn set_time(&mut self, now: SystemTime) {
+        self.now = Some(now)
+    }
+
+    fn get_time(&self) -> SystemTime {
+        self.now.unwrap()
+    }
+
+    fn truncate(&mut self, store: &mut Store) {
+        if let Some(widget) = &mut store.logs_widget {
+            if let Some(data) = widget.get_data().data.get_mut("logs").unwrap() {
+                let truncate_index = data.len() as i16 - self.from_to_top;
+                if truncate_index > 0 {
+                    widget.set_data("logs".to_string(), data.split_off(truncate_index as usize));
+                }
+            }
+        }
+    }
 }
 
-pub trait Truncator: Start + Truncate + Periodical + Update {}
-impl<T: Start + Truncate + Periodical + Update> Truncator for T {}
-
-pub struct SimpleTruncator {
+pub struct NoopTruncator {
     _time_elapsed: i32,
     _store: Option<Store>,
 }
 
-impl SimpleTruncator {
+impl NoopTruncator {
     pub fn new() -> Self {
-        SimpleTruncator {
+        NoopTruncator {
             _time_elapsed: 0,
             _store: None,
         }
     }
 }
 
-impl Start for SimpleTruncator {
-    fn start(&self) {}
-}
+impl Truncatorix for NoopTruncator {
+    fn set_time(&mut self, now: SystemTime) {}
 
-impl Truncate for SimpleTruncator {
-    fn truncate(&self) {}
-}
+    fn get_time(&self) -> SystemTime {
+        SystemTime::now()
+    }
 
-impl Periodical for SimpleTruncator {
-    fn poll(&self) {}
-}
-
-impl Update for SimpleTruncator {
-    fn update(&self) {}
+    fn truncate(&mut self, store: &mut Store) {}
 }

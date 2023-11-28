@@ -30,6 +30,7 @@ pub struct Store {
     pub login_widget: Option<BodyWidget>,
     pub logs_widget: Option<BodyWidget>,
     pub pods_widget: Option<BodyWidget>,
+    pub tail_widget: Option<BodyWidget>,
 }
 
 impl Store {
@@ -38,6 +39,7 @@ impl Store {
         login_widget: BodyWidget,
         logs_widget: BodyWidget,
         pods_widget: BodyWidget,
+        tail_widget: BodyWidget,
     ) -> Store {
         Store {
             request_login: false,
@@ -48,6 +50,7 @@ impl Store {
             login_widget: Some(login_widget),
             logs_widget: Some(logs_widget),
             pods_widget: Some(pods_widget),
+            tail_widget: Some(tail_widget),
         }
     }
 }
@@ -91,6 +94,7 @@ pub enum TUIEvent {
     LogThreadStopped(CliWidgetId),
     AddLog(String),
     AddPods(String),
+    AddTailLog(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -107,6 +111,7 @@ pub enum TUIAction {
     ChangeEnv(KubeEnv),
     GetLogs,
     GetPods,
+    GetTail,
 }
 
 #[derive(Debug, PartialEq)]
