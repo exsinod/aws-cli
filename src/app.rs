@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::{
-    structs::{Direction2, KubeEnv, Store, TUIError, TUIEvent, UserInput},
+    structs::{Direction2, KubeEnv, Store, TUIAction, TUIError, TUIEvent, UserInput},
     ui::{MainLayoutUI, SingleLayoutUI, UI},
     widgets::{CliWidgetId, RenderWidget},
 };
@@ -44,10 +44,12 @@ where
     B: Backend,
 {
     terminal: &'a mut Terminal<B>,
+    store: Option<Store>,
     store_rx: Receiver<Store>,
     event_tx: Sender<TUIEvent>,
+    action_tx: Sender<TUIAction>,
     thread_mngt: Option<ThreadManage>,
-    extended_keymap: Vec<fn(KeyCode)>,
+    extended_keymap: &'a Vec<fn(KeyCode)>,
 }
 
 impl<'a, B: Backend> App<'a, B> {
@@ -55,12 +57,15 @@ impl<'a, B: Backend> App<'a, B> {
         terminal: &'a mut Terminal<B>,
         store_rx: Receiver<Store>,
         event_tx: Sender<TUIEvent>,
-        extended_keymap: Vec<fn(KeyCode)>,
+        action_tx: Sender<TUIAction>,
+        extended_keymap: &'a Vec<fn(KeyCode)>,
     ) -> Self {
         App {
             terminal,
+            store: None,
             store_rx,
             event_tx,
+            action_tx,
             thread_mngt: None,
             extended_keymap,
         }
@@ -68,7 +73,6 @@ impl<'a, B: Backend> App<'a, B> {
 
     pub fn run_app(&mut self) -> io::Result<()> {
         let mut should_quit = false;
-        let mut store: Option<Store> = None;
         let logs_thread_started = false;
         let login_logs_thread_started = false;
         let tail_thread_started = false;
@@ -79,29 +83,42 @@ impl<'a, B: Backend> App<'a, B> {
         ));
 
         while let false = should_quit {
+            if let Some(store) = self.store.as_ref() {
+                let user_input = self.handle_user_input(store, &self.extended_keymap);
+                if let Some(input) = user_input {
+                    match input {
+                        UserInput::Quit => {
+                            debug!("Exiting");
+                            should_quit = true;
+                        }
+                        UserInput::ChangeEnv => {
+                            debug!("Change env mode");
+                            self.event_tx.send(TUIEvent::RequestEnvChange).unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+            }
             while let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(20)) {
                 trace!("got store {:?}", updated_store);
-                store = Some(updated_store.clone());
+                self.store = Some(updated_store.clone());
                 let mut ui = UI::main(&MainLayoutUI::new());
-                ui.widgets
-                    .push(Box::new(updated_store.clone().header_widget.unwrap()));
-                self.initiate_threads(updated_store.clone());
+                let mut widgets: Vec<Box<&dyn RenderWidget>> = vec![];
+                widgets.push(Box::new(updated_store.header_widget.as_ref().unwrap()));
+                self.initiate_threads(&updated_store);
                 if updated_store
                     .clone()
                     .login_widget
                     .unwrap()
-                    .get_data()
+                    .get_data_mut()
                     .data
                     .get("logs")
                     .is_some()
                 {
-                    ui.widgets
-                        .push(Box::new(updated_store.login_widget.unwrap()));
+                    widgets.push(Box::new(updated_store.login_widget.as_ref().unwrap()));
                 } else if updated_store.logged_in {
-                    ui.widgets
-                        .push(Box::new(updated_store.pods_widget.unwrap()));
-                    ui.widgets
-                        .push(Box::new(updated_store.logs_widget.unwrap()));
+                    widgets.push(Box::new(updated_store.pods_widget.as_ref().unwrap()));
+                    widgets.push(Box::new(updated_store.logs_widget.as_ref().unwrap()));
                 } else if updated_store.request_login {
                     ui = UI::single(&SingleLayoutUI::new());
                     ui.widget_fn = Some(|f, layout| {
@@ -121,28 +138,13 @@ impl<'a, B: Backend> App<'a, B> {
                     });
                 } else {
                 }
+                ui.add_to_widgets(widgets);
                 self.terminal.draw(|f| ui.ui(f)).unwrap();
-            }
-            if let Some(store) = store.as_ref() {
-                let user_input =
-                    self.handle_user_input(store.clone(), self.extended_keymap.clone());
-                if let Some(input) = user_input {
-                    match input {
-                        UserInput::Quit => {
-                            debug!("Exiting");
-                            should_quit = true;
-                        }
-                        UserInput::ChangeEnv => {
-                            debug!("Change env mode");
-                            self.event_tx.send(TUIEvent::RequestEnvChange).unwrap();
-                        }
-                        _ => {}
-                    }
-                }
             }
         }
         Ok(())
     }
+
     fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
         let popup_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -162,27 +164,28 @@ impl<'a, B: Backend> App<'a, B> {
             ])
             .split(popup_layout[1])[1]
     }
-    fn initiate_threads(&mut self, updated_store: Store) {
+
+    fn initiate_threads(&mut self, updated_store: &Store) {
         if updated_store.logged_in {
             if !self.thread_mngt.as_mut().unwrap().logs_thread_started {
                 debug!("initiate logs thread");
-                self.event_tx
-                    .send(TUIEvent::LogThreadStarted(CliWidgetId::GetLogs))
-                    .unwrap();
+                if let Some(widget_data) = &self.store.as_ref().unwrap().logs_widget {
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                }
                 self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
             }
             if !self.thread_mngt.as_mut().unwrap().tail_thread_started {
                 debug!("initiate tail thread");
-                self.event_tx
-                    .send(TUIEvent::LogThreadStarted(CliWidgetId::Tail))
-                    .unwrap();
+                if let Some(widget_data) = &self.store.as_ref().unwrap().tail_widget {
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                }
                 self.thread_mngt.as_mut().unwrap().tail_thread_started = true;
             }
             if !self.thread_mngt.as_mut().unwrap().pods_thread_started {
                 debug!("initiate pods thread");
-                self.event_tx
-                    .send(TUIEvent::LogThreadStarted(CliWidgetId::GetPods))
-                    .unwrap();
+                if let Some(widget_data) = &self.store.as_ref().unwrap().pods_widget {
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                }
                 self.thread_mngt.as_mut().unwrap().pods_thread_started = true;
             }
         }
@@ -190,8 +193,8 @@ impl<'a, B: Backend> App<'a, B> {
 
     fn handle_user_input(
         &self,
-        store: Store,
-        extended_keymap: Vec<fn(KeyCode)>,
+        store: &Store,
+        extended_keymap: &Vec<fn(KeyCode)>,
     ) -> Option<UserInput> {
         let mut user_input: Option<UserInput> = None;
         if let Ok(true) = event::poll(Duration::from_millis(10)) {

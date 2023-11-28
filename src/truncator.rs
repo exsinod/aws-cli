@@ -46,7 +46,7 @@ impl Truncatorix for TopTruncator {
 
     fn truncate(&mut self, store: &mut Store) {
         if let Some(widget) = &mut store.logs_widget {
-            if let Some(data) = widget.get_data().data.get_mut("logs").unwrap() {
+            if let Some(Some(data)) = widget.get_data_mut().data.get_mut("logs") {
                 let truncate_index = data.len() as i16 - self.from_to_top;
                 if truncate_index > 0 {
                     widget.set_data("logs".to_string(), data.split_off(truncate_index as usize));

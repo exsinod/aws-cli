@@ -27,25 +27,29 @@ pub enum CliWidgetId {
 }
 
 pub trait RenderWidget {
-    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI);
-    fn get_widget(&mut self) -> &mut CliWidget;
+    fn render(&self, f: &mut Frame, layout: MainLayoutUI);
+    fn get_widget(&self) -> &CliWidget;
+    fn get_widget_mut(&mut self) -> &mut CliWidget;
 
-    fn get_data(&mut self) -> CliWidgetData {
+    fn get_data(&self) -> CliWidgetData {
+        self.get_widget().data.clone()
+    }
+
+    fn get_data_mut(&mut self) -> CliWidgetData {
         self.get_widget().data.clone()
     }
 
     fn set_thread_started(&mut self, started: bool) {
-        self.get_widget().data.thread_started = started
+        self.get_widget_mut().data.thread_started = started
     }
 
     fn set_data(&mut self, key: String, text: Vec<String>) -> CliWidgetData {
-        self.get_widget().data.data.insert(key, Some(text));
-        self.get_widget().data.clone()
+        self.get_widget_mut().data.data.insert(key, Some(text));
+        self.get_widget_mut().data.clone()
     }
 
-    fn clear_text_data(&mut self, key: String) -> CliWidgetData {
-        self.get_widget().data.clone().data.insert(key, None);
-        self.get_widget().data.clone()
+    fn clear_text_data(&mut self, key: String) {
+        self.get_widget_mut().data.data.insert(key, None);
     }
 }
 
@@ -57,6 +61,7 @@ pub struct HeaderWidget {
 #[derive(Clone, Debug, Default)]
 pub struct BodyWidget {
     black: bool,
+    full_screen: bool,
     pub widget: CliWidget,
 }
 
@@ -66,6 +71,7 @@ pub struct CliWidget {
     pub title: Option<String>,
     pub data: CliWidgetData,
     pub pos: usize,
+    pub logged_in: bool,
     is_selected: bool,
 }
 
@@ -76,8 +82,12 @@ impl HeaderWidget {
 }
 
 impl BodyWidget {
-    pub fn new(black: bool, widget: CliWidget) -> Self {
-        BodyWidget { black, widget }
+    pub fn new(black: bool, full_screen: bool, widget: CliWidget) -> Self {
+        BodyWidget {
+            black,
+            full_screen,
+            widget,
+        }
     }
 }
 
@@ -124,79 +134,96 @@ impl<'a> HeaderWidget {
 }
 
 impl<'a> RenderWidget for HeaderWidget {
-    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI) {
+    fn render(&self, f: &mut Frame, layout: MainLayoutUI) {
         let rect = layout.get_header_rect(0, f);
-        f.render_widget(
-            self.header_error(
-                self.widget
-                    .data
-                    .clone()
-                    .data
-                    .get("error")
-                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
-            ),
-            rect[0],
-        );
-        f.render_widget(
-            self.header_login_info(
-                false,
-                self.widget
-                    .data
-                    .clone()
-                    .data
-                    .get("login_info")
-                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
-            ),
-            rect[1],
-        );
+        if let Some(error) = self.widget.data.data.get("error") {
+            f.render_widget(
+                self.header_error(error.as_ref().and_then(|e| Some(e.join("\n")))),
+                rect[0],
+            );
+        }
+        if let Some(login_info) = self.widget.data.data.get("login_info") {
+            if let Some(Some(logged_in)) = self.get_data().data.get("logged in") {
+            f.render_widget(
+                self.header_login_info(logged_in[0].eq(true.to_string().as_str()), login_info.as_ref().and_then(|e| Some(e.join("\n")))),
+                rect[1],
+            );
+            }
+        }
         let rect = layout.get_header_rect(1, f);
-        f.render_widget(
-            self.kube_info(
-                self.widget
-                    .data
-                    .clone()
-                    .data
-                    .get("kube_info")
-                    .and_then(|d| Some(d.clone().unwrap().clone().join("\n"))),
-            ),
-            rect[0],
-        );
+        if let Some(kube_info) = self.widget.data.data.get("kube_info") {
+            f.render_widget(
+                self.kube_info(kube_info.as_ref().and_then(|e| Some(e.join("\n")))),
+                rect[0],
+            );
+        }
     }
 
-    fn get_widget(&mut self) -> &mut CliWidget {
+    fn get_widget(&self) -> &CliWidget {
+        &self.widget
+    }
+
+    fn get_widget_mut(&mut self) -> &mut CliWidget {
         &mut self.widget
     }
 }
 
 impl<'a> RenderWidget for BodyWidget {
-    fn render(&mut self, f: &mut Frame, layout: MainLayoutUI) {
+    fn render(&self, f: &mut Frame, layout: MainLayoutUI) {
         trace!("rendering widget with data {:?}", self.widget.data.clone());
         match self.widget.title.clone() {
             Some(title) => {
                 if let Some(logs) = self.get_data().data.get("logs") {
-                    let rect = layout.get_body_rect(f);
-                    if self.black {
-                        f.render_widget(
-                            self.widget
-                                .content_in_black(
-                                    title.to_string(),
-                                    logs.clone(),
-                                    rect[self.widget.pos],
-                                )
-                                .unwrap_or_default(),
-                            rect[self.widget.pos],
-                        );
+                    if self.full_screen {
+                        let rect = layout.get_full_rect(f);
+                        if self.black {
+                            f.render_widget(
+                                self.widget
+                                    .content_in_black(
+                                        title.to_string(),
+                                        logs.clone(),
+                                        rect[self.widget.pos],
+                                    )
+                                    .unwrap_or_default(),
+                                rect[self.widget.pos],
+                            );
+                        } else {
+                            f.render_widget(
+                                self.widget
+                                    .content_in_white(
+                                        title.to_string(),
+                                        self.widget.data.clone().data.get("logs").unwrap().clone(),
+                                        rect[self.widget.pos],
+                                    )
+                                    .unwrap_or_default(),
+                                rect[self.widget.pos],
+                            );
+                        }
                     } else {
-                        f.render_widget(
-                            self.widget
-                                .content_in_white(
-                                    title.to_string(),
-                                    self.widget.data.clone().data.get("logs").unwrap().clone(),
-                                    rect[self.widget.pos],
-                                )
-                                .unwrap_or_default(),
-                            rect[self.widget.pos],
-                        );
+                        let rect = layout.get_body_rect(f);
+                        if self.black {
+                            f.render_widget(
+                                self.widget
+                                    .content_in_black(
+                                        title.to_string(),
+                                        logs.clone(),
+                                        rect[self.widget.pos],
+                                    )
+                                    .unwrap_or_default(),
+                                rect[self.widget.pos],
+                            );
+                        } else {
+                            f.render_widget(
+                                self.widget
+                                    .content_in_white(
+                                        title.to_string(),
+                                        self.widget.data.clone().data.get("logs").unwrap().clone(),
+                                        rect[self.widget.pos],
+                                    )
+                                    .unwrap_or_default(),
+                                rect[self.widget.pos],
+                            );
+                        }
                     }
                 }
             }
@@ -204,7 +231,11 @@ impl<'a> RenderWidget for BodyWidget {
         }
     }
 
-    fn get_widget(&mut self) -> &mut CliWidget {
+    fn get_widget(&self) -> &CliWidget {
+        &self.widget
+    }
+
+    fn get_widget_mut(&mut self) -> &mut CliWidget {
         &mut self.widget
     }
 }
@@ -216,6 +247,7 @@ impl<'a> CliWidget {
             title: Some(title),
             data,
             pos,
+            logged_in: false,
             is_selected: false,
         }
     }
@@ -226,6 +258,7 @@ impl<'a> CliWidget {
             title: None,
             data,
             pos: 0,
+            logged_in: false,
             is_selected: false,
         }
     }
@@ -303,7 +336,7 @@ impl<'a> CliWidget {
 }
 
 fn add_to_widget_data<'a>(widget: &mut BodyWidget, text: String) -> &mut BodyWidget {
-    if let Some(Some(existing_test)) = &mut widget.get_data().data.get_mut("logs") {
+    if let Some(Some(existing_test)) = &mut widget.get_data_mut().data.get_mut("logs") {
         existing_test.push(text);
         widget.set_data("logs".to_string(), existing_test.to_vec());
     } else {
@@ -331,6 +364,7 @@ pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let login_widget = BodyWidget::new(
         false,
+        true,
         CliWidget::bordered(
             CliWidgetId::GetLoginLogs,
             "Logging in...".to_string(),
@@ -362,6 +396,7 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let logs_widget = BodyWidget::new(
         true,
+        false,
         CliWidget::bordered(
             CliWidgetId::GetLogs,
             "Salespoint Logs".to_string(),
@@ -393,6 +428,7 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let pods_widget = BodyWidget::new(
         true,
+        false,
         CliWidget::bordered(
             CliWidgetId::GetPods,
             "Salespoint pods".to_string(),
@@ -424,6 +460,7 @@ pub fn create_tail_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let tail_widget = BodyWidget::new(
         true,
+        false,
         CliWidget::bordered(
             CliWidgetId::Tail,
             "cli logs".to_string(),

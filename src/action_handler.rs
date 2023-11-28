@@ -16,7 +16,6 @@ use crate::structs::{KubeEnv, KubeEnvData, TUIError, DEV, PROD};
 use crate::{TUIAction, TUIEvent};
 
 pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
-    let mut logs_thread = false;
     let event_tx_clone = event_tx.clone();
     while let Ok(action) = action_rx.recv() {
         debug!("handling action: {:?}", action);
@@ -57,9 +56,7 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
             }
             TUIAction::GetLogs => {
                 let event_tx_clone = event_tx_clone.clone();
-                logs_thread = true;
                 thread::spawn(move || {
-                    while logs_thread {
                         if let Err(error) =
                             get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
                         {
@@ -67,7 +64,6 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                                 .send(TUIEvent::Error(TUIError::API(error)))
                                 .unwrap();
                         }
-                    }
                 });
             }
             TUIAction::GetPods => {

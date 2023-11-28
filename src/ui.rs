@@ -47,6 +47,21 @@ impl<'a> MainLayoutUI<'a> {
         MainLayoutUI { draw_frame: None }
     }
 
+    pub fn get_full_rect(&self, f: &mut Frame<'_>) -> Rc<[Rect]> {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Max(1),
+                Constraint::Max(1),
+                Constraint::Percentage(90),
+            ])
+            .split(f.size());
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(100)])
+            .split(main_layout[2])
+    }
+
     pub fn get_body_rect(&self, f: &mut Frame<'_>) -> Rc<[Rect]> {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -81,7 +96,7 @@ impl<'a> MainLayoutUI<'a> {
 pub struct UI<'a> {
     main_layout: Option<MainLayoutUI<'a>>,
     single_layout: Option<SingleLayoutUI>,
-    pub widgets: Vec<Box<dyn RenderWidget>>,
+    widgets: Option<Vec<Box<&'a dyn RenderWidget>>>,
     pub widget_fn: Option<fn(f: &mut Frame<'_>, layout: Rect)>,
     pub ui_transform: UITransform,
 }
@@ -91,7 +106,7 @@ impl<'a> UI<'a> {
         UI {
             main_layout: Some(main_layout.clone()),
             single_layout: None,
-            widgets: vec![Box::new(HeaderWidget::default())],
+            widgets: None,
             widget_fn: None,
             ui_transform: UITransform::new(),
         }
@@ -100,7 +115,7 @@ impl<'a> UI<'a> {
         UI {
             main_layout: None,
             single_layout: Some(main_layout.clone()),
-            widgets: vec![Box::new(HeaderWidget::default())],
+            widgets: None,
             widget_fn: None,
             ui_transform: UITransform::new(),
         }
@@ -108,13 +123,19 @@ impl<'a> UI<'a> {
 
     pub fn ui(&mut self, f: &mut Frame<'_>) {
         if let Some(main_layout) = &self.main_layout {
-            for widget in self.widgets.iter_mut() {
-                widget.render(f, main_layout.clone());
+            if let Some(widgets) = &self.widgets {
+                for widget in widgets.iter() {
+                    widget.render(f, main_layout.clone());
+                }
             }
         }
         if let Some(single_layout) = &self.single_layout {
             let rect = single_layout.get_body_rect(f);
             (self.widget_fn.unwrap())(f, rect);
         }
+    }
+
+    pub fn add_to_widgets(&mut self, widgets: Vec<Box<&'a dyn RenderWidget>>) {
+        self.widgets = Some(widgets);
     }
 }
