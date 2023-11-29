@@ -25,18 +25,8 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                     KubeEnv::Dev => DEV,
                     KubeEnv::Prod => PROD,
                 };
-                match update_kubeconfig(env_data, event_tx_clone.clone()) {
-                    Ok(_) => {
-                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
-                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
-                    }
-                    Err(_) => {
-                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
-                    }
-                }
-            }
-            TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
-                Ok(_) => match update_kubeconfig(DEV, event_tx_clone.clone()) {
+                match check_connectivity(event_tx_clone.clone()) {
+                Ok(_) => match update_kubeconfig(env_data, event_tx_clone.clone()) {
                     Ok(_) => {
                         event_tx.clone().send(TUIEvent::IsConnected).unwrap();
                         event_tx.clone().send(TUIEvent::ClearError).unwrap();
@@ -49,6 +39,17 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                     on_error(error, event_tx.clone());
                     event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                 }
+                };
+            },
+            TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
+                Ok(_) => {
+                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
+                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                    }
+                Err(error) => {
+                    on_error(error, event_tx.clone());
+                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                }
             },
             TUIAction::LogIn => {
                 let event_tx_clone = event_tx_clone.clone();
@@ -57,13 +58,13 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
             TUIAction::GetLogs => {
                 let event_tx_clone = event_tx_clone.clone();
                 thread::spawn(move || {
-                        if let Err(error) =
-                            get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
-                        {
-                            event_tx_clone
-                                .send(TUIEvent::Error(TUIError::API(error)))
-                                .unwrap();
-                        }
+                    if let Err(error) =
+                        get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
+                    {
+                        event_tx_clone
+                            .send(TUIEvent::Error(TUIError::API(error)))
+                            .unwrap();
+                    }
                 });
             }
             TUIAction::GetPods => {

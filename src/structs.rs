@@ -20,8 +20,9 @@ impl<'a> KubeEnvData<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Store {
+    pub ui_state: UIState,
     pub request_login: bool,
     pub logged_in: bool,
     pub env_change_possible: bool,
@@ -42,6 +43,7 @@ impl Store {
         tail_widget: BodyWidget,
     ) -> Store {
         Store {
+            ui_state: UIState::LoggingIn,
             request_login: false,
             logged_in: false,
             env_change_possible: false,
@@ -72,6 +74,15 @@ impl CliWidgetData {
             data: HashMap::default(),
         }
     }
+}
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub enum UIState {
+    #[default]
+    Init,
+    UserInput,
+    LoggingIn,
+    LoggedIn,
 }
 
 #[derive(Debug, PartialEq)]

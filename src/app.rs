@@ -16,7 +16,7 @@ use ratatui::{
 use crate::{
     structs::{Direction2, KubeEnv, Store, TUIAction, TUIError, TUIEvent, UserInput},
     ui::{MainLayoutUI, SingleLayoutUI, UI},
-    widgets::{CliWidgetId, RenderWidget},
+    widgets::{CliWidgetId, HeaderWidget, RenderWidget},
 };
 
 struct ThreadManage {
@@ -49,7 +49,7 @@ where
     event_tx: Sender<TUIEvent>,
     action_tx: Sender<TUIAction>,
     thread_mngt: Option<ThreadManage>,
-    extended_keymap: &'a Vec<fn(KeyCode)>,
+    extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
 }
 
 impl<'a, B: Backend> App<'a, B> {
@@ -58,12 +58,12 @@ impl<'a, B: Backend> App<'a, B> {
         store_rx: Receiver<Store>,
         event_tx: Sender<TUIEvent>,
         action_tx: Sender<TUIAction>,
-        extended_keymap: &'a Vec<fn(KeyCode)>,
+        extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
     ) -> Self {
         App {
             terminal,
-            store: None,
             store_rx,
+            store: None,
             event_tx,
             action_tx,
             thread_mngt: None,
@@ -83,59 +83,51 @@ impl<'a, B: Backend> App<'a, B> {
         ));
 
         while let false = should_quit {
-            if let Some(store) = self.store.as_ref() {
-                let user_input = self.handle_user_input(store, &self.extended_keymap);
-                if let Some(input) = user_input {
-                    match input {
-                        UserInput::Quit => {
-                            debug!("Exiting");
-                            should_quit = true;
-                        }
-                        UserInput::ChangeEnv => {
-                            debug!("Change env mode");
-                            self.event_tx.send(TUIEvent::RequestEnvChange).unwrap();
-                        }
-                        _ => {}
+            let user_input = self.handle_user_input(&self.extended_keymap);
+            if let Some(input) = user_input {
+                match input {
+                    UserInput::Quit => {
+                        debug!("Exiting");
+                        should_quit = true;
                     }
+                    UserInput::ChangeEnv => {
+                        debug!("Change env mode");
+                        self.event_tx.send(TUIEvent::RequestEnvChange).unwrap();
+                    }
+                    _ => {}
                 }
             }
             while let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(20)) {
-                trace!("got store {:?}", updated_store);
                 self.store = Some(updated_store.clone());
                 let mut ui = UI::main(&MainLayoutUI::new());
                 let mut widgets: Vec<Box<&dyn RenderWidget>> = vec![];
                 widgets.push(Box::new(updated_store.header_widget.as_ref().unwrap()));
-                self.initiate_threads(&updated_store);
-                if updated_store
-                    .clone()
-                    .login_widget
-                    .unwrap()
-                    .get_data_mut()
-                    .data
-                    .get("logs")
-                    .is_some()
-                {
-                    widgets.push(Box::new(updated_store.login_widget.as_ref().unwrap()));
-                } else if updated_store.logged_in {
-                    widgets.push(Box::new(updated_store.pods_widget.as_ref().unwrap()));
-                    widgets.push(Box::new(updated_store.logs_widget.as_ref().unwrap()));
-                } else if updated_store.request_login {
-                    ui = UI::single(&SingleLayoutUI::new());
-                    ui.widget_fn = Some(|f, layout| {
-                        f.render_widget(
-                            Paragraph::new(
-                                "\nWhat do you want to do?\n\n
+                self.initiate_threads();
+                if let Some(login_widget) = updated_store.clone().login_widget {
+                    if let Some(Some(_)) = login_widget.get_data().data.get("logs") {
+                        widgets.push(Box::new(updated_store.login_widget.as_ref().unwrap()));
+                    } else 
+                        if updated_store.logged_in {
+                        widgets.push(Box::new(updated_store.pods_widget.as_ref().unwrap()));
+                        widgets.push(Box::new(updated_store.logs_widget.as_ref().unwrap()));
+                    } else if updated_store.request_login {
+                        ui = UI::single(&SingleLayoutUI::new());
+                        ui.widget_fn = Some(|f, layout| {
+                            f.render_widget(
+                                Paragraph::new(
+                                    "\nWhat do you want to do?\n\n
                                 1. retry (I forgot to turn on my VPN)\n
                                 2. Login to AWS",
+                                )
+                                .block(
+                                    Block::default()
+                                        .borders(Borders::all())
+                                        .title("It seems I can't reach your resources..."),
+                                ),
+                                Self::centered_rect(layout, 50, 30),
                             )
-                            .block(
-                                Block::default()
-                                    .borders(Borders::all())
-                                    .title("It seems I can't reach your resources..."),
-                            ),
-                            Self::centered_rect(layout, 50, 30),
-                        )
-                    });
+                        });
+                    }
                 } else {
                 }
                 ui.add_to_widgets(widgets);
@@ -165,105 +157,111 @@ impl<'a, B: Backend> App<'a, B> {
             .split(popup_layout[1])[1]
     }
 
-    fn initiate_threads(&mut self, updated_store: &Store) {
-        if updated_store.logged_in {
-            if !self.thread_mngt.as_mut().unwrap().logs_thread_started {
-                debug!("initiate logs thread");
-                if let Some(widget_data) = &self.store.as_ref().unwrap().logs_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+    fn initiate_threads(&mut self) {
+        if let Some(store) = self.store.as_ref() {
+            if store.logged_in {
+                if !self.thread_mngt.as_mut().unwrap().logs_thread_started {
+                    debug!("initiate logs thread");
+                    if let Some(widget_data) = &store.logs_widget {
+                        widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    }
+                    self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
                 }
-                self.thread_mngt.as_mut().unwrap().logs_thread_started = true;
-            }
-            if !self.thread_mngt.as_mut().unwrap().tail_thread_started {
-                debug!("initiate tail thread");
-                if let Some(widget_data) = &self.store.as_ref().unwrap().tail_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                if !self.thread_mngt.as_mut().unwrap().tail_thread_started {
+                    debug!("initiate tail thread");
+                    if let Some(widget_data) = &store.tail_widget {
+                        widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    }
+                    self.thread_mngt.as_mut().unwrap().tail_thread_started = true;
                 }
-                self.thread_mngt.as_mut().unwrap().tail_thread_started = true;
-            }
-            if !self.thread_mngt.as_mut().unwrap().pods_thread_started {
-                debug!("initiate pods thread");
-                if let Some(widget_data) = &self.store.as_ref().unwrap().pods_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                if !self.thread_mngt.as_mut().unwrap().pods_thread_started {
+                    debug!("initiate pods thread");
+                    if let Some(widget_data) = &store.pods_widget {
+                        widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    }
+                    self.thread_mngt.as_mut().unwrap().pods_thread_started = true;
                 }
-                self.thread_mngt.as_mut().unwrap().pods_thread_started = true;
             }
         }
     }
 
     fn handle_user_input(
         &self,
-        store: &Store,
-        extended_keymap: &Vec<fn(KeyCode)>,
+        extended_keymap: &Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
     ) -> Option<UserInput> {
-        let mut user_input: Option<UserInput> = None;
-        if let Ok(true) = event::poll(Duration::from_millis(10)) {
-            if let Ok(Event::Key(key)) = event::read() {
-                user_input = Self::handle_primary_keys(key.code).or_else(|| {
-                    Self::handle_direction_keys(key.code).or_else(|| {
-                        if store.env_change_possible {
-                            match key.code {
-                                KeyCode::Char('1') => {
-                                    self.event_tx
-                                        .send(TUIEvent::EnvChange(KubeEnv::Dev))
-                                        .unwrap();
+        if let Some(store) = self.store.as_ref() {
+            let mut user_input: Option<UserInput> = None;
+            if let Ok(true) = event::poll(Duration::from_millis(10)) {
+                if let Ok(Event::Key(key)) = event::read() {
+                    user_input = Self::handle_primary_keys(key.code).or_else(|| {
+                        Self::handle_direction_keys(key.code).or_else(|| {
+                            if store.env_change_possible {
+                                match key.code {
+                                    KeyCode::Char('1') => {
+                                        self.event_tx
+                                            .send(TUIEvent::EnvChange(KubeEnv::Dev))
+                                            .unwrap();
+                                    }
+                                    KeyCode::Char('2') => {
+                                        self.event_tx
+                                            .send(TUIEvent::EnvChange(KubeEnv::Prod))
+                                            .unwrap();
+                                    }
+                                    _ => {}
                                 }
-                                KeyCode::Char('2') => {
-                                    self.event_tx
-                                        .send(TUIEvent::EnvChange(KubeEnv::Prod))
-                                        .unwrap();
+                            } else if store.request_login {
+                                match key.code {
+                                    KeyCode::Char('1') => {
+                                        self.event_tx.send(TUIEvent::RequestLoginStop).unwrap();
+                                        self.event_tx.send(TUIEvent::ClearError).unwrap();
+                                        self.event_tx.send(TUIEvent::CheckConnectivity).unwrap();
+                                    }
+                                    KeyCode::Char('2') => {
+                                        self.event_tx.send(TUIEvent::RequestLoginStop).unwrap();
+                                        self.event_tx.send(TUIEvent::NeedsLogin).unwrap()
+                                    }
+                                    _ => {
+                                        match key.code {
+                                            KeyCode::Null => {}
+                                            _ => {
+                                                self.event_tx
+                                                    .send(TUIEvent::Error(TUIError::KEY(
+                                                        "Unrecognised key: ".to_string()
+                                                            + &format!("{:?}", key.code)
+                                                                .to_string()
+                                                            + " Press q to quit",
+                                                    )))
+                                                    .unwrap();
+                                            }
+                                        };
+                                    }
                                 }
-                                _ => {}
+                            } else {
+                                for check in extended_keymap {
+                                    check(key.code, store, self.event_tx.clone())
+                                }
+                                match key.code {
+                                    KeyCode::Null => {}
+                                    _ => {
+                                        self.event_tx
+                                            .send(TUIEvent::Error(TUIError::KEY(
+                                                "Unrecognised key: ".to_string()
+                                                    + &format!("{:?}", key.code).to_string()
+                                                    + " Press q to quit",
+                                            )))
+                                            .unwrap();
+                                    }
+                                };
                             }
-                        } else if store.request_login {
-                            match key.code {
-                                KeyCode::Char('1') => {
-                                    self.event_tx.send(TUIEvent::RequestLoginStop).unwrap();
-                                    self.event_tx.send(TUIEvent::ClearError).unwrap();
-                                    self.event_tx.send(TUIEvent::CheckConnectivity).unwrap();
-                                }
-                                KeyCode::Char('2') => {
-                                    self.event_tx.send(TUIEvent::RequestLoginStop).unwrap();
-                                    self.event_tx.send(TUIEvent::NeedsLogin).unwrap()
-                                }
-                                _ => {
-                                    match key.code {
-                                        KeyCode::Null => {}
-                                        _ => {
-                                            self.event_tx
-                                                .send(TUIEvent::Error(TUIError::KEY(
-                                                    "Unrecognised key: ".to_string()
-                                                        + &format!("{:?}", key.code).to_string()
-                                                        + " Press q to quit",
-                                                )))
-                                                .unwrap();
-                                        }
-                                    };
-                                }
-                            }
-                        } else {
-                            for check in extended_keymap {
-                                check(key.code)
-                            }
-                            match key.code {
-                                KeyCode::Null => {}
-                                _ => {
-                                    self.event_tx
-                                        .send(TUIEvent::Error(TUIError::KEY(
-                                            "Unrecognised key: ".to_string()
-                                                + &format!("{:?}", key.code).to_string()
-                                                + " Press q to quit",
-                                        )))
-                                        .unwrap();
-                                }
-                            };
-                        }
-                        None
-                    })
-                });
+                            None
+                        })
+                    });
+                }
             }
+            user_input
+        } else {
+            None
         }
-        user_input
     }
 
     fn handle_primary_keys(keycode: KeyCode) -> Option<UserInput> {

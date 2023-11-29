@@ -7,7 +7,10 @@ use std::{
 use log::{debug, error, trace};
 
 use crate::{
-    structs::TUIError, truncator::Truncatorix, widgets::RenderWidget, Store, TUIAction, TUIEvent,
+    structs::{TUIError, UIState},
+    truncator::Truncatorix,
+    widgets::RenderWidget,
+    Store, TUIAction, TUIEvent,
 };
 
 pub struct WidgetDataStore<'a> {
@@ -39,7 +42,7 @@ impl<'a> WidgetDataStore<'a> {
         self.truncator.start();
     }
 
-    pub fn start(&mut self, event_handlers: Vec<fn(&TUIEvent, &mut Store)>) {
+    pub fn start(&mut self, event_handlers: Vec<fn(&TUIEvent, &mut Store) -> Option<()>>) {
         self.start_truncator();
         self.send();
         while let Ok(event) = self.event_rx.recv() {
@@ -48,7 +51,6 @@ impl<'a> WidgetDataStore<'a> {
             match event {
                 TUIEvent::RequestEnvChange => {
                     self.store.env_change_possible = true;
-                    self.send();
                 }
                 TUIEvent::EnvChange(env) => {
                     action_tx_clone
@@ -59,7 +61,6 @@ impl<'a> WidgetDataStore<'a> {
                         "kube_info".to_string(),
                         vec![format!("{:?}", env).to_string()],
                     );
-                    self.send();
                 }
                 TUIEvent::Error(error) => match error {
                     TUIError::VPN => {
@@ -68,7 +69,6 @@ impl<'a> WidgetDataStore<'a> {
                             .as_mut()
                             .unwrap()
                             .set_data("error".to_string(), vec!["Uhm... VPN on ?".to_string()]);
-                        self.send();
                     }
                     TUIError::KEY(error) | TUIError::API(error) => {
                         self.store
@@ -76,29 +76,25 @@ impl<'a> WidgetDataStore<'a> {
                             .as_mut()
                             .unwrap()
                             .set_data("error".to_string(), vec![error]);
-                        self.send();
                     }
                 },
                 TUIEvent::ClearError => {
                     if let Some(header_widget) = self.store.header_widget.as_mut() {
                         header_widget.clear_text_data("error".to_string());
-                        self.send();
                     }
                 }
                 TUIEvent::CheckConnectivity => {
                     self.store.request_login = false;
                     action_tx_clone.send(TUIAction::CheckConnectivity).unwrap();
-                    self.send();
                 }
                 TUIEvent::RequestLoginStart => {
                     self.store.request_login = true;
-                    self.send();
                 }
                 TUIEvent::RequestLoginStop => {
                     self.store.request_login = false;
-                    self.send();
                 }
                 TUIEvent::NeedsLogin => {
+                    self.store.ui_state = UIState::LoggingIn;
                     self.action_tx.send(TUIAction::LogIn).unwrap();
                 }
                 TUIEvent::IsLoggedIn => {
@@ -111,30 +107,35 @@ impl<'a> WidgetDataStore<'a> {
                         header_widget.set_data("logged in".to_string(), vec![true.to_string()]);
                     }
                     self.action_tx.send(TUIAction::CheckConnectivity).unwrap();
-                    self.send();
                 }
                 TUIEvent::IsConnected => {
                     self.store.logged_in = true;
+                    if let Some(login_widget) = self.store.login_widget.as_mut() {
+                        login_widget.clear_text_data("logs".to_string());
+                    }
                     if let Some(header_widget) = self.store.header_widget.as_mut() {
                         header_widget.set_data("logged in".to_string(), vec![true.to_string()]);
-                        header_widget.set_data("login_info".to_string(), vec!["LOGGED IN".to_string()]);
+                        header_widget
+                            .set_data("login_info".to_string(), vec!["LOGGED IN".to_string()]);
                     }
-                    self.send();
                 }
                 TUIEvent::DisplayLoginCode(code) => {
                     self.store.login_code = Some(code);
-                    self.send();
                 }
                 event => {
-                    for f in event_handlers.as_slice() {
-                        f(&event, self.store);
+                    let mut event_handlers = event_handlers.iter();
+                    let mut b = Some(());
+                    while let Some(()) = b {
+                        if let Some(next_handler) = event_handlers.next() {
+                            b = next_handler(&event, &mut self.store)
+                        }
                     }
-                    self.send();
                 }
             }
             if let Some(()) = self.truncator.poll() {
                 self.truncator.truncate(self.store)
             }
+            self.send()
         }
     }
 
@@ -173,11 +174,11 @@ fn test_error_events() {
             action_tx,
             Box::new(crate::truncator::NoopTruncator::new()),
         );
-        widget_data_store.start(
-            vec![login_widget_data.get_event_handler(),
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
             logs_widget_data.get_event_handler(),
-            pods_widget_data.get_event_handler()],
-        )
+            pods_widget_data.get_event_handler(),
+        ])
     });
     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
         assert!(
@@ -273,11 +274,11 @@ fn test_check_connectivity_event() {
             action_tx,
             Box::new(crate::truncator::NoopTruncator::new()),
         );
-        widget_data_store.start(
-            vec![login_widget_data.get_event_handler(),
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
             logs_widget_data.get_event_handler(),
-            pods_widget_data.get_event_handler()],
-        )
+            pods_widget_data.get_event_handler(),
+        ])
     });
     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
         assert!(
@@ -327,11 +328,11 @@ fn test_login_event() {
             action_tx,
             Box::new(crate::truncator::NoopTruncator::new()),
         );
-        widget_data_store.start(
-            vec![login_widget_data.get_event_handler(),
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
             logs_widget_data.get_event_handler(),
-            pods_widget_data.get_event_handler()],
-        )
+            pods_widget_data.get_event_handler(),
+        ])
     });
     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
         assert!(!updated_store.logged_in, "store was: {:?}", updated_store)
@@ -377,11 +378,11 @@ fn test_add_log_event() {
             action_tx,
             Box::new(crate::truncator::NoopTruncator::new()),
         );
-        widget_data_store.start(
-            vec![login_widget_data.get_event_handler(),
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
             logs_widget_data.get_event_handler(),
-            pods_widget_data.get_event_handler()],
-        )
+            pods_widget_data.get_event_handler(),
+        ])
     });
     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
         assert!(
