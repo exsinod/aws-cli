@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::mpsc::Sender};
 
 use crossterm::event::KeyCode;
-use log::{debug, trace};
+use log::trace;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Style},
@@ -480,7 +480,7 @@ pub fn create_tail_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     }
 }
 
-pub fn create_login_request_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+pub fn _create_login_request_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     let login_request_widget_data = CliWidgetData {
         id: CliWidgetId::Tail,
         thread_started: false,

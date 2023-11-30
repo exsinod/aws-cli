@@ -1,7 +1,7 @@
 mod action_handler;
 mod app;
 mod structs;
-mod truncator;
+pub mod truncator;
 mod ui;
 mod widget_data_store;
 mod widgets;
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // action thread
     thread::spawn(move || {
-        action_handler::start(event_tx_clone.clone(), action_rx);
+        action_handler::start(event_tx_clone, action_rx);
     });
 
     // init state
@@ -107,14 +107,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     extended_keymap.push(header_widget_data.get_keymap());
 
     // create app and run it
-    let res = App::new(
-        &mut terminal,
-        store_rx,
-        event_tx,
-        action_tx,
-        &extended_keymap,
-    )
-    .run_app();
+    let res = App::new(&mut terminal, event_tx, action_tx, &extended_keymap).run_app(store_rx);
 
     // restore terminal
     disable_raw_mode()?;

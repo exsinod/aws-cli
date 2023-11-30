@@ -1,4 +1,4 @@
-use crate::widgets::{HeaderWidget, RenderWidget};
+use crate::widgets::RenderWidget;
 use std::rc::Rc;
 
 use ratatui::{

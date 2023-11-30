@@ -1,4 +1,4 @@
-use std::{
+pub use std::{
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
@@ -151,7 +151,7 @@ impl<'a> WidgetDataStore<'a> {
 fn test_error_events() {
     crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-    let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+    let (action_tx, _): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
 
     thread::spawn(move || {

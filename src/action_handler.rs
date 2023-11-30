@@ -26,26 +26,26 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                     KubeEnv::Prod => PROD,
                 };
                 match check_connectivity(event_tx_clone.clone()) {
-                Ok(_) => match update_kubeconfig(env_data, event_tx_clone.clone()) {
-                    Ok(_) => {
-                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
-                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
-                    }
-                    Err(_) => {
+                    Ok(_) => match update_kubeconfig(env_data, event_tx_clone.clone()) {
+                        Ok(_) => {
+                            event_tx.clone().send(TUIEvent::IsConnected).unwrap();
+                            event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                        }
+                        Err(_) => {
+                            event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                        }
+                    },
+                    Err(error) => {
+                        on_error(error, event_tx.clone());
                         event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
                     }
-                },
-                Err(error) => {
-                    on_error(error, event_tx.clone());
-                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
-                }
                 };
-            },
+            }
             TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
                 Ok(_) => {
-                        event_tx.clone().send(TUIEvent::IsConnected).unwrap();
-                        event_tx.clone().send(TUIEvent::ClearError).unwrap();
-                    }
+                    event_tx.clone().send(TUIEvent::IsConnected).unwrap();
+                    event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                }
                 Err(error) => {
                     on_error(error, event_tx.clone());
                     event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
@@ -505,7 +505,7 @@ fn test_login_fail() {
 fn test_open_log_channel() {
     crate::init_logging().unwrap();
     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-    let mut error = None;
+    let error;
 
     let child = Command::new("sh")
         .arg("-C") //config

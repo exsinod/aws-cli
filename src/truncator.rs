@@ -1,7 +1,5 @@
 use std::time::SystemTime;
 
-use log::debug;
-
 use crate::{structs::Store, widgets::RenderWidget};
 
 pub trait Truncatorix {
@@ -71,11 +69,11 @@ impl NoopTruncator {
 }
 
 impl Truncatorix for NoopTruncator {
-    fn set_time(&mut self, now: SystemTime) {}
+    fn set_time(&mut self, _: SystemTime) {}
 
     fn get_time(&self) -> SystemTime {
         SystemTime::now()
     }
 
-    fn truncate(&mut self, store: &mut Store) {}
+    fn truncate(&mut self, _: &mut Store) {}
 }
