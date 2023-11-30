@@ -28,7 +28,7 @@ pub enum CliWidgetId {
 }
 
 pub trait RenderWidget {
-    fn render(&self, f: &mut Frame, layout: MainLayoutUI);
+    fn render(&self, f: &mut Frame, layout: &MainLayoutUI);
     fn get_widget(&self) -> &CliWidget;
     fn get_widget_mut(&mut self) -> &mut CliWidget;
 
@@ -126,7 +126,7 @@ impl<'a> HeaderWidget {
 }
 
 impl<'a> RenderWidget for HeaderWidget {
-    fn render(&self, f: &mut Frame, layout: MainLayoutUI) {
+    fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         let rect = layout.get_header_rect(0, f);
         if let Some(error) = self.widget.data.data.get("error") {
             f.render_widget(
@@ -164,7 +164,7 @@ impl<'a> RenderWidget for HeaderWidget {
 }
 
 impl<'a> RenderWidget for BodyWidget {
-    fn render(&self, f: &mut Frame, layout: MainLayoutUI) {
+    fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         trace!("rendering widget with data {:?}", self.widget.data.clone());
         match self.widget.title.clone() {
             Some(title) => {
@@ -511,7 +511,7 @@ pub fn _create_login_request_widget_data<'a>() -> WidgetDescription<BodyWidget> 
     WidgetDescription {
         widget: login_request_widget,
         event_handler: login_request_event_handler,
-        keymap: |keycode: KeyCode, store: &Store, event_tx: Sender<TUIEvent>| {
+        keymap: |keycode: KeyCode, store: &Store, event_tx: &Sender<TUIEvent>| {
             if store.request_login {
                 match keycode {
                     KeyCode::Char('1') => {
@@ -534,7 +534,7 @@ pub fn _create_login_request_widget_data<'a>() -> WidgetDescription<BodyWidget> 
 pub struct WidgetDescription<T: RenderWidget + Clone> {
     widget: T,
     event_handler: fn(&TUIEvent, &mut Store) -> Option<()>,
-    keymap: fn(KeyCode, &Store, Sender<TUIEvent>),
+    keymap: fn(KeyCode, &Store, &Sender<TUIEvent>),
 }
 
 impl<T: RenderWidget + Clone> WidgetDescription<T> {
@@ -546,7 +546,7 @@ impl<T: RenderWidget + Clone> WidgetDescription<T> {
         self.event_handler
     }
 
-    pub fn get_keymap(&self) -> fn(KeyCode, &Store, Sender<TUIEvent>) {
+    pub fn get_keymap(&self) -> fn(KeyCode, &Store, &Sender<TUIEvent>) {
         self.keymap
     }
 }

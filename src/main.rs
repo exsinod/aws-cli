@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
 
     // package the extended keymaps in a Vec
-    let mut extended_keymap: Vec<fn(KeyCode, &Store, Sender<TUIEvent>)> = vec![];
+    let mut extended_keymap: Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)> = vec![];
     extended_keymap.push(header_widget_data.get_keymap());
 
     // create app and run it

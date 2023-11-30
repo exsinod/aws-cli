@@ -16,7 +16,6 @@ use crate::structs::{KubeEnv, KubeEnvData, TUIError, DEV, PROD};
 use crate::{TUIAction, TUIEvent};
 
 pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
-    let event_tx_clone = event_tx.clone();
     while let Ok(action) = action_rx.recv() {
         debug!("handling action: {:?}", action);
         match action {
@@ -25,41 +24,41 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                     KubeEnv::Dev => DEV,
                     KubeEnv::Prod => PROD,
                 };
-                match check_connectivity(event_tx_clone.clone()) {
-                    Ok(_) => match update_kubeconfig(env_data, event_tx_clone.clone()) {
+                match check_connectivity(&event_tx) {
+                    Ok(_) => match update_kubeconfig(env_data, &event_tx) {
                         Ok(_) => {
-                            event_tx.clone().send(TUIEvent::IsConnected).unwrap();
-                            event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                            event_tx.send(TUIEvent::IsConnected).unwrap();
+                            event_tx.send(TUIEvent::ClearError).unwrap();
                         }
                         Err(_) => {
-                            event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                            event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                         }
                     },
                     Err(error) => {
-                        on_error(error, event_tx.clone());
-                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                        on_error(&error, &event_tx);
+                        event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                     }
                 };
             }
-            TUIAction::CheckConnectivity => match check_connectivity(event_tx_clone.clone()) {
+            TUIAction::CheckConnectivity => match check_connectivity(&event_tx) {
                 Ok(_) => {
-                    event_tx.clone().send(TUIEvent::IsConnected).unwrap();
-                    event_tx.clone().send(TUIEvent::ClearError).unwrap();
+                    event_tx.send(TUIEvent::IsConnected).unwrap();
+                    event_tx.send(TUIEvent::ClearError).unwrap();
                 }
                 Err(error) => {
-                    on_error(error, event_tx.clone());
-                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                    on_error(&error, &event_tx);
+                    event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                 }
             },
             TUIAction::LogIn => {
-                let event_tx_clone = event_tx_clone.clone();
-                thread::spawn(move || login(login_command(), event_tx_clone.clone()));
+                let event_tx_clone = event_tx.clone();
+                thread::spawn(move || login(login_command(), &event_tx_clone));
             }
             TUIAction::GetLogs => {
-                let event_tx_clone = event_tx_clone.clone();
+                let event_tx_clone = event_tx.clone();
                 thread::spawn(move || {
                     if let Err(error) =
-                        get_logs(get_logs_command(), event_tx_clone.clone(), |_| false)
+                        get_logs(get_logs_command(), &event_tx_clone, |_| false)
                     {
                         event_tx_clone
                             .send(TUIEvent::Error(TUIError::API(error)))
@@ -68,24 +67,23 @@ pub fn start(event_tx: Sender<TUIEvent>, action_rx: Receiver<TUIAction>) {
                 });
             }
             TUIAction::GetPods => {
-                let event_tx_clone = event_tx_clone.clone();
                 match get_pods() {
                     Ok(output) => {
-                        event_tx_clone.send(TUIEvent::AddPods(output)).unwrap();
+                        event_tx.send(TUIEvent::AddPods(output)).unwrap();
                     }
                     Err(error) => {
-                        on_error(error, event_tx.clone());
-                        event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                        on_error(&error, &event_tx);
+                        event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                     }
                 }
             }
             TUIAction::GetTail => match get_tail(get_tail_command()) {
                 Ok(output) => {
-                    event_tx_clone.send(TUIEvent::AddTailLog(output)).unwrap();
+                    event_tx.send(TUIEvent::AddTailLog(output)).unwrap();
                 }
                 Err(error) => {
-                    on_error(error, event_tx.clone());
-                    event_tx.clone().send(TUIEvent::RequestLoginStart).unwrap();
+                    on_error(&error, &event_tx);
+                    event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                 }
             },
         }
@@ -160,7 +158,7 @@ fn get_pods_command() -> Result<Child, Error> {
         .spawn()
 }
 
-fn update_kubeconfig(kube_env: KubeEnvData, event_tx: Sender<TUIEvent>) -> Result<String, String> {
+fn update_kubeconfig(kube_env: KubeEnvData, event_tx: &Sender<TUIEvent>) -> Result<String, String> {
     match update_kubeconfig_command(kube_env) {
         Ok(child) => wait_for_output_with_timeout(child, event_tx),
         Err(error) => Err(error.to_string()),
@@ -174,7 +172,7 @@ fn get_pods() -> Result<String, String> {
     }
 }
 
-fn check_connectivity(event_tx: Sender<TUIEvent>) -> Result<String, String> {
+fn check_connectivity(event_tx: &Sender<TUIEvent>) -> Result<String, String> {
     match get_pods_command() {
         Ok(child) => wait_for_output_with_timeout(child, event_tx),
         Err(error) => Err(error.to_string()),
@@ -183,7 +181,7 @@ fn check_connectivity(event_tx: Sender<TUIEvent>) -> Result<String, String> {
 
 fn get_logs(
     child: Result<Child, Error>,
-    event_tx: Sender<TUIEvent>,
+    event_tx: &Sender<TUIEvent>,
     timeout_fn: fn(Instant) -> bool,
 ) -> Result<(), String> {
     return if let Ok(mut child) = child {
@@ -199,11 +197,11 @@ fn get_logs(
                 child.kill().unwrap();
             }
             if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
-                on_error(error.clone(), event_tx.clone());
+                on_error(&error, &event_tx);
                 has_error = true;
             }
             if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
-                add_logs(event_tx.clone(), line.clone());
+                add_logs(&event_tx, &line);
             }
         }
         if !child.wait().unwrap().success() || has_error {
@@ -224,7 +222,7 @@ fn get_tail(child: Result<Child, std::io::Error>) -> Result<String, String> {
 
 fn wait_for_output_with_timeout(
     mut child: Child,
-    event_tx: Sender<TUIEvent>,
+    event_tx: &Sender<TUIEvent>,
 ) -> Result<String, String> {
     let now = Instant::now();
     let mut result: Option<Result<String, String>> = None;
@@ -249,10 +247,8 @@ fn wait_for_output_with_timeout(
                 trace!("wait with timeout still waiting");
                 if now.elapsed().as_secs() > 1 {
                     if send_error {
-                        let event_tx_clone = event_tx.clone();
                         send_error = false;
-                        event_tx_clone
-                            .clone()
+                        event_tx
                             .send(TUIEvent::Error(TUIError::VPN))
                             .unwrap();
                     }
@@ -289,7 +285,7 @@ fn wait_for_output(child: Child) -> Result<String, String> {
     }
 }
 
-fn login(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
+fn login(child: Result<Child, Error>, event_tx: &Sender<TUIEvent>) {
     if let Ok(mut child) = child {
         let child_stdout = open_child_stdout(&mut child);
         let child_stderr = open_child_stderr(&mut child);
@@ -297,20 +293,20 @@ fn login(child: Result<Child, Error>, event_tx: Sender<TUIEvent>) {
             open_log_channel(child_stdout, child_stderr);
         while !thread_handle.is_finished() {
             if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
-                on_error(error.clone(), event_tx.clone());
+                on_error(&error, &event_tx);
             }
             if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
-                add_login_logs(event_tx.clone(), line.clone());
-                check_login_status(line.clone(), event_tx.clone());
+                add_login_logs(&event_tx, &line);
+                check_login_status(&line, &event_tx);
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
 }
 
-fn on_error(error: String, event_tx: Sender<TUIEvent>) {
+fn on_error(error: &str, event_tx: &Sender<TUIEvent>) {
     event_tx
-        .send(TUIEvent::Error(TUIError::API(error)))
+        .send(TUIEvent::Error(TUIError::API(error.to_string())))
         .unwrap();
 }
 
@@ -412,7 +408,7 @@ fn open_log_channel(
     (log_channel_thread, read_stdout_rx, read_stderr_rx)
 }
 
-fn check_login_status(line: String, event_tx: Sender<TUIEvent>) {
+fn check_login_status(line: &str, event_tx: &Sender<TUIEvent>) {
     let re_code = Regex::new(r"[A-Za-z]{4}-[A-Za-z]{4}").unwrap();
     if let Some(code) = re_code.captures(&line) {
         event_tx
@@ -426,12 +422,12 @@ fn check_login_status(line: String, event_tx: Sender<TUIEvent>) {
     }
 }
 
-fn add_login_logs(event_tx: Sender<TUIEvent>, line: String) {
-    event_tx.send(TUIEvent::AddLoginLog(line)).unwrap();
+fn add_login_logs(event_tx: &Sender<TUIEvent>, line: &str) {
+    event_tx.send(TUIEvent::AddLoginLog(line.to_string())).unwrap();
 }
 
-fn add_logs(event_tx: Sender<TUIEvent>, line: String) {
-    event_tx.send(TUIEvent::AddLog(line)).unwrap();
+fn add_logs(event_tx: &Sender<TUIEvent>, line: &str) {
+    event_tx.send(TUIEvent::AddLog(line.to_string())).unwrap();
 }
 
 #[test]
@@ -445,7 +441,7 @@ fn test_login_succeed() {
         .stderr(Stdio::piped())
         .spawn();
 
-    thread::spawn(move || login(child, event_tx));
+    thread::spawn(move || login(child, &event_tx));
 
     let check_events = vec![
             TUIEvent::AddLoginLog("Attempting to automatically open the SSO authorization page in your default browser.\n".to_string()),
@@ -484,7 +480,7 @@ fn test_login_fail() {
         .stderr(Stdio::piped())
         .spawn();
 
-    thread::spawn(move || login(child, event_tx));
+    thread::spawn(move || login(child, &event_tx));
 
     let check_events = vec![TUIEvent::Error(TUIError::API(
         "this is an unusual error\n".to_string(),
@@ -513,7 +509,7 @@ fn test_open_log_channel() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
-    if let Err(err) = get_logs(child, event_tx, |_| false) {
+    if let Err(err) = get_logs(child, &event_tx, |_| false) {
         error = Some(err);
     } else {
         assert!(false, "{:?}", false);
@@ -551,7 +547,7 @@ fn test_get_logs() {
             .spawn();
         let timeout_fn: fn(Instant) -> bool =
             |now| now + Duration::from_millis(300) < Instant::now();
-        get_logs(child, event_tx, timeout_fn).unwrap();
+        get_logs(child, &event_tx, timeout_fn).unwrap();
     });
     let mut events = vec![];
     let mut actions = vec![];
@@ -595,7 +591,7 @@ fn test_wait_with_output_timeout() {
     let mut events = vec![];
     let check_events = vec![TUIEvent::Error(TUIError::VPN)];
     match child {
-        Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
+        Ok(child) => match wait_for_output_with_timeout(child, &event_tx) {
             Ok(output) => {
                 while events.is_empty() {
                     if let Ok(event) = event_rx.recv_timeout(Duration::from_millis(10)) {
@@ -622,7 +618,7 @@ fn test_wait_with_output_timeout_fail() {
         .spawn();
     let (event_tx, _): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
     match child {
-        Ok(child) => match wait_for_output_with_timeout(child, event_tx) {
+        Ok(child) => match wait_for_output_with_timeout(child, &event_tx) {
             Ok(_) => {}
             Err(error) => {
                 assert!(error == "Exit code 1".to_string(), "error was: {:?}", error);

@@ -47,7 +47,7 @@ where
     terminal: &'a mut Terminal<B>,
     event_tx: Sender<TUIEvent>,
     action_tx: Sender<TUIAction>,
-    extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
+    extended_keymap: &'a Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)>,
 }
 
 impl<'a, B: Backend> App<'a, B> {
@@ -55,7 +55,7 @@ impl<'a, B: Backend> App<'a, B> {
         terminal: &'a mut Terminal<B>,
         event_tx: Sender<TUIEvent>,
         action_tx: Sender<TUIAction>,
-        extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
+        extended_keymap: &'a Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)>,
     ) -> Self {
         App {
             is_running: true,
@@ -71,8 +71,8 @@ impl<'a, B: Backend> App<'a, B> {
             &mut self.terminal,
             self.extended_keymap,
             &store_rx,
-            self.event_tx.clone(),
-            self.action_tx.clone(),
+            &self.event_tx,
+            &self.action_tx,
         )
         .unwrap();
         while self.is_running {
@@ -102,10 +102,10 @@ where
     B: Backend,
 {
     terminal: &'a mut Terminal<B>,
-    extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
+    extended_keymap: &'a Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)>,
     store_rx: &'a Receiver<Store>,
-    event_tx: Sender<TUIEvent>,
-    action_tx: Sender<TUIAction>,
+    event_tx: &'a Sender<TUIEvent>,
+    action_tx: &'a Sender<TUIAction>,
     store: Store,
     thread_mngt: ThreadManage,
 }
@@ -113,10 +113,10 @@ where
 impl<'a, B: Backend> StorePresenter<'a, B> {
     fn init(
         terminal: &'a mut Terminal<B>,
-        extended_keymap: &'a Vec<fn(KeyCode, &Store, Sender<TUIEvent>)>,
+        extended_keymap: &'a Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)>,
         store_rx: &'a Receiver<Store>,
-        event_tx: Sender<TUIEvent>,
-        action_tx: Sender<TUIAction>,
+        event_tx: &'a Sender<TUIEvent>,
+        action_tx: &'a Sender<TUIAction>,
     ) -> Result<Self, String> {
         if let Ok(updated_store) = store_rx.recv() {
             Ok(StorePresenter {
@@ -133,17 +133,19 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
         }
     }
     fn present(&mut self) {
-        let mut ui = UI::main(&MainLayoutUI::new());
+        let main_layout = MainLayoutUI::new();
+        let single_layout = SingleLayoutUI::new();
+        let mut ui = UI::main(&main_layout);
         let mut widgets: Vec<Box<&dyn RenderWidget>> = vec![];
         widgets.push(Box::new(self.store.header_widget.as_ref().unwrap()));
-        if let Some(login_widget) = self.store.clone().login_widget {
+        if let Some(login_widget) = &self.store.login_widget {
             if let Some(Some(_)) = login_widget.get_data().data.get("logs") {
                 widgets.push(Box::new(self.store.login_widget.as_ref().unwrap()));
             } else if self.store.logged_in {
                 widgets.push(Box::new(self.store.pods_widget.as_ref().unwrap()));
                 widgets.push(Box::new(self.store.logs_widget.as_ref().unwrap()));
             } else if self.store.request_login {
-                ui = UI::single(&SingleLayoutUI::new());
+                ui = UI::single(&single_layout);
                 ui.widget_fn = Some(|f, layout| {
                     f.render_widget(
                         Paragraph::new(
@@ -213,7 +215,7 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                             }
                         } else {
                             for check in self.extended_keymap {
-                                check(key.code, &self.store, self.event_tx.clone())
+                                check(key.code, &self.store, &self.event_tx)
                             }
                             match key.code {
                                 KeyCode::Null => {}
@@ -270,21 +272,21 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
             if !self.thread_mngt.logs_thread_started {
                 debug!("initiate logs thread");
                 if let Some(widget_data) = &self.store.logs_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
                 }
                 self.thread_mngt.logs_thread_started = true;
             }
             if !self.thread_mngt.tail_thread_started {
                 debug!("initiate tail thread");
                 if let Some(widget_data) = &self.store.tail_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
                 }
                 self.thread_mngt.tail_thread_started = true;
             }
             if !self.thread_mngt.pods_thread_started {
                 debug!("initiate pods thread");
                 if let Some(widget_data) = &self.store.pods_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx.clone());
+                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
                 }
                 self.thread_mngt.pods_thread_started = true;
             }

@@ -94,27 +94,27 @@ impl<'a> MainLayoutUI<'a> {
 }
 
 pub struct UI<'a> {
-    main_layout: Option<MainLayoutUI<'a>>,
-    single_layout: Option<SingleLayoutUI>,
+    main_layout: Option<&'a MainLayoutUI<'a>>,
+    single_layout: Option<&'a SingleLayoutUI>,
     widgets: Option<Vec<Box<&'a dyn RenderWidget>>>,
     pub widget_fn: Option<fn(f: &mut Frame<'_>, layout: Rect)>,
     pub ui_transform: UITransform,
 }
 
 impl<'a> UI<'a> {
-    pub fn main(main_layout: &MainLayoutUI<'a>) -> Self {
+    pub fn main(main_layout: &'a MainLayoutUI<'a>) -> Self {
         UI {
-            main_layout: Some(main_layout.clone()),
+            main_layout: Some(main_layout),
             single_layout: None,
             widgets: None,
             widget_fn: None,
             ui_transform: UITransform::new(),
         }
     }
-    pub fn single(main_layout: &SingleLayoutUI) -> Self {
+    pub fn single(main_layout: &'a SingleLayoutUI) -> Self {
         UI {
             main_layout: None,
-            single_layout: Some(main_layout.clone()),
+            single_layout: Some(main_layout),
             widgets: None,
             widget_fn: None,
             ui_transform: UITransform::new(),
@@ -125,7 +125,7 @@ impl<'a> UI<'a> {
         if let Some(main_layout) = &self.main_layout {
             if let Some(widgets) = &self.widgets {
                 for widget in widgets.iter() {
-                    widget.render(f, main_layout.clone());
+                    widget.render(f, main_layout);
                 }
             }
         }

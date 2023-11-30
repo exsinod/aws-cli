@@ -61,7 +61,7 @@ impl Store {
 pub struct CliWidgetData {
     pub id: CliWidgetId,
     pub thread_started: bool,
-    pub initiate_thread: Option<fn(action_tx: Sender<TUIAction>)>,
+    pub initiate_thread: Option<fn(action_tx: &Sender<TUIAction>)>,
     pub data: HashMap<String, Option<Vec<String>>>,
 }
 
