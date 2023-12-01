@@ -1,231 +1,29 @@
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Error};
-use std::process::ChildStderr;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::io::BufRead;
+use std::process::{Command, Stdio};
+use std::str;
 use std::{
-    process::{Child, ChildStdout, Command, Stdio},
-    str,
+    collections::HashMap,
+    io::{BufReader, Error},
+    process::{Child, ChildStderr, ChildStdout},
     sync::mpsc::{self, Receiver, Sender},
-    thread,
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use log::{debug, trace};
 use regex::Regex;
 
-use crate::structs::{KubeEnv, KubeEnvData, TUIError, DEV, PROD};
-use crate::thread_manager::ThreadManager;
-use crate::widgets::CliWidgetId;
-use crate::{TUIAction, TUIEvent};
+use crate::structs::KubeEnvData;
+use crate::{
+    structs::{TUIError, TUIEvent},
+    widgets::CliWidgetId,
+};
 
-pub struct ActionHandler<'a> {
-    event_tx: &'a Sender<TUIEvent>,
-    action_rx: &'a Receiver<TUIAction>,
-    thread_manager: ThreadManager,
-}
-
-impl<'a> ActionHandler<'a> {
-    pub fn start(event_tx: &Sender<TUIEvent>, action_rx: &Receiver<TUIAction>) {
-        let action_handler = ActionHandler {
-            event_tx,
-            action_rx,
-            thread_manager: ThreadManager::new(),
-        };
-        thread::spawn(move || {
-        action_handler.run()});
-    }
-
-    pub fn run(&self) {
-        while let Ok(action) = self.action_rx.recv() {
-            debug!("handling action: {:?}", action);
-            match action {
-                TUIAction::ChangeEnv(env) => {
-                    let env_data = match env {
-                        KubeEnv::Dev => DEV,
-                        KubeEnv::Prod => PROD,
-                    };
-                    match self.check_connectivity() {
-                        Ok(_) => match self.update_kubeconfig(env_data) {
-                            Ok(_) => {
-                                self.event_tx.send(TUIEvent::IsConnected).unwrap();
-                                self.event_tx.send(TUIEvent::ClearError).unwrap();
-                            }
-                            Err(_) => {
-                                self.event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                            }
-                        },
-                        Err(error) => {
-                            self.on_error(&error);
-                            self.event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                        }
-                    };
-                }
-                TUIAction::CheckConnectivity => match self.check_connectivity() {
-                    Ok(_) => {
-                        self.event_tx.send(TUIEvent::IsConnected).unwrap();
-                        self.event_tx.send(TUIEvent::ClearError).unwrap();
-                    }
-                    Err(error) => {
-                        self.on_error(&error);
-                        self.event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                    }
-                },
-                TUIAction::LogIn => {
-                    let event_tx_clone = self.event_tx.clone();
-                    // thread::spawn(move || self.login(self.login_command(), &event_tx_clone));
-                }
-                TUIAction::GetLogs => {
-                    let event_tx_clone = self.event_tx.clone();
-                    // thread::spawn(move || {
-                    //     if let Err(error) =
-                    //         self.get_logs(self.get_logs_command(), &event_tx_clone, |_| false)
-                    //     {
-                    //         event_tx_clone
-                    //             .send(TUIEvent::Error(TUIError::API(error)))
-                    //             .unwrap();
-                    //     }
-                    // });
-                }
-                TUIAction::GetPods => {
-                    self.thread_manager.run_task(
-                        CliWidgetId::GetPods,
-                        |output: String, event_tx: Sender<TUIEvent>| {
-                            event_tx.send(TUIEvent::AddPods(output)).unwrap();
-                        },
-                        |event_tx: Sender<TUIEvent>| {
-                            event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                        },
-                        self.event_tx,
-                    );
-                }
-
-                TUIAction::GetTail => match self.get_tail(self.get_tail_command()) {
-                    Ok(output) => {
-                        self.event_tx.send(TUIEvent::AddTailLog(output)).unwrap();
-                    }
-                    Err(error) => {
-                        self.on_error(&error);
-                        self.event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                    }
-                },
-            }
-        }
-    }
-
-    fn login_command(&self) -> Result<Child, Error> {
-        // Command::new("cat")
-        //     .arg("aws_sso_mock.sh") //config
-        Command::new("aws")
-            .arg("sso")
-            .arg("login")
-            .arg("--profile")
-            .arg("myccv-lab-non-prod-myccv-lab-developer") //config
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-
-    fn get_logs_command(&self) -> Result<Child, Error> {
-        // Command::new("tail")
-        //     .arg("-f")
-        //     .arg("src/main.rs")
-        Command::new("kubectl")
-            .arg("logs")
-            .arg("-n")
-            .arg("myccv-dev-salespoint") //config
-            .arg("-l")
-            .arg("component=salespoint-v2") //config
-            .arg("-c")
-            .arg("salespoint-v2") //config
-            .arg("-f")
-            .arg("--prefix=true")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-
-    fn get_tail_command(&self) -> Result<Child, Error> {
-        Command::new("cat")
-            .arg("logs.txt")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-
-    fn update_kubeconfig_command(&self, kube_env: KubeEnvData) -> Result<Child, Error> {
-        Command::new("aws")
-            .arg("eks")
-            .arg("--profile")
-            .arg(kube_env.profile) //config
-            .arg("update-kubeconfig")
-            .arg("--name")
-            .arg(kube_env.environment) //config
-            // Command::new("cat")
-            //     .arg("aws_sso_mock.sh") //config
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-
-    fn get_pods_command(&self) -> Result<Child, Error> {
-        Command::new("kubectl")
-            .arg("get")
-            .arg("-n")
-            .arg("myccv-dev-salespoint") //config
-            .arg("pods")
-            // Command::new("cat")
-            //     .arg("aws_sso_mock.sh") //config
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }
-
-    fn update_kubeconfig(
-        &self,
-        kube_env: KubeEnvData,
-    ) -> Result<String, String> {
-        match self.update_kubeconfig_command(kube_env) {
-            Ok(child) => self.wait_for_output_with_timeout(child),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn get_pods(&self) -> Result<String, String> {
-        match self.get_pods_command() {
-            Ok(child) => Ok("".to_string()),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn check_connectivity(&self) -> Result<String, String> {
-        match self.get_pods_command() {
-            Ok(child) => self.wait_for_output_with_timeout(child),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn login(&self, child: Result<Child, Error>) {
-        if let Ok(mut child) = child {
-            let child_stdout = self.open_child_stdout(&mut child);
-            let child_stderr = self.open_child_stderr(&mut child);
-            let (thread_handle, read_stdout_rx, read_stderr_rx) =
-                self.open_log_channel(child_stdout, child_stderr);
-            while !thread_handle.is_finished() {
-                if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
-                    self.on_error(&error);
-                }
-                if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
-                    self.add_login_logs(&line);
-                    self.check_login_status(&line);
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-        }
-    }
-
+pub trait IOEventSender {
     fn get_logs(
         &self,
         child: Result<Child, Error>,
+        event_tx: &Sender<TUIEvent>,
         timeout_fn: fn(Instant) -> bool,
     ) -> Result<(), String> {
         return if let Ok(mut child) = child {
@@ -241,11 +39,11 @@ impl<'a> ActionHandler<'a> {
                     child.kill().unwrap();
                 }
                 if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
-                    self.on_error(&error);
+                    self.on_error(&error, &event_tx);
                     has_error = true;
                 }
                 if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
-                    self.add_logs(&line);
+                    self.add_logs(&event_tx, &line);
                 }
             }
             if !child.wait().unwrap().success() || has_error {
@@ -259,7 +57,23 @@ impl<'a> ActionHandler<'a> {
             Err("process quit immediately".to_string())
         };
     }
-
+    fn wait_for_output(child: Child) -> Result<String, String> {
+        let process = child.wait_with_output();
+        match process {
+            Err(err) => {
+                // did not reach this part so far...
+                Err("Unknown error: {:?}".to_string() + &err.to_string())
+            }
+            Ok(output) => {
+                if output.status.success() {
+                    Ok(str::from_utf8(&output.stdout).unwrap().to_string())
+                } else {
+                    Err("Error: {:?}".to_string()
+                        + str::from_utf8(output.stderr.as_slice()).unwrap())
+                }
+            }
+        }
+    }
     fn get_tail(&self, child: Result<Child, std::io::Error>) -> Result<String, String> {
         Ok("".to_string())
         // self.thread_manager.wait_for_output(child.unwrap())
@@ -267,7 +81,9 @@ impl<'a> ActionHandler<'a> {
 
     fn wait_for_output_with_timeout(
         &self,
-        mut child: Child,    ) -> Result<String, String> {
+        mut child: Child,
+        event_tx: &Sender<TUIEvent>,
+    ) -> Result<String, String> {
         let now = Instant::now();
         let mut result: Option<Result<String, String>> = None;
         let mut send_error = true;
@@ -294,7 +110,7 @@ impl<'a> ActionHandler<'a> {
                     if now.elapsed().as_secs() > 1 {
                         if send_error {
                             send_error = false;
-                            self.event_tx.send(TUIEvent::Error(TUIError::VPN)).unwrap();
+                            event_tx.send(TUIEvent::Error(TUIError::VPN)).unwrap();
                         }
                     }
                     if now + Duration::from_secs(60) < Instant::now() {
@@ -312,8 +128,8 @@ impl<'a> ActionHandler<'a> {
         result.unwrap_or(Ok("nothing".to_string()))
     }
 
-    fn on_error(&self, error: &str) {
-        self.event_tx
+    fn on_error(&self, error: &str, event_tx: &Sender<TUIEvent>) {
+        event_tx
             .send(TUIEvent::Error(TUIError::API(error.to_string())))
             .unwrap();
     }
@@ -420,27 +236,178 @@ impl<'a> ActionHandler<'a> {
         (log_channel_thread, read_stdout_rx, read_stderr_rx)
     }
 
-    fn check_login_status(&self, line: &str) {
+    fn check_login_status(&self, line: &str, event_tx: &Sender<TUIEvent>) {
         let re_code = Regex::new(r"[A-Za-z]{4}-[A-Za-z]{4}").unwrap();
         if let Some(code) = re_code.captures(&line) {
-            self.event_tx
+            event_tx
                 .send(TUIEvent::DisplayLoginCode(
                     code.get(0).unwrap().as_str().to_string(),
                 ))
                 .unwrap();
         }
         if line.contains("Successfully") {
-            self.event_tx.send(TUIEvent::IsLoggedIn).unwrap();
+            event_tx.send(TUIEvent::IsLoggedIn).unwrap();
         }
     }
 
-    fn add_login_logs(&self, line: &str) {
-        self.event_tx
+    fn add_login_logs(&self, event_tx: &Sender<TUIEvent>, line: &str) {
+        event_tx
             .send(TUIEvent::AddLoginLog(line.to_string()))
             .unwrap();
     }
 
-    fn add_logs(&self, line: &str) {
-        self.event_tx.send(TUIEvent::AddLog(line.to_string())).unwrap();
+    fn add_logs(&self, event_tx: &Sender<TUIEvent>, line: &str) {
+        event_tx.send(TUIEvent::AddLog(line.to_string())).unwrap();
+    }
+}
+
+pub struct ThreadManager {
+    threads: HashMap<CliWidgetId, JoinHandle<()>>,
+}
+
+impl IOEventSender for ThreadManager {}
+
+impl ThreadManager {
+    pub fn new() -> Self {
+        ThreadManager {
+            threads: HashMap::default(),
+        }
+    }
+
+    pub fn run_task(
+        &mut self,
+        id: CliWidgetId,
+        success_fn: fn(output: String, Sender<TUIEvent>),
+        error_fn: fn(Sender<TUIEvent>),
+        event_tx: &Sender<TUIEvent>,
+    ) {
+        match self.get_pods() {
+            Ok(output) => {
+                event_tx.send(TUIEvent::AddPods(output)).unwrap();
+            }
+            Err(error) => {
+                self.on_error(&error, &event_tx);
+                event_tx.send(TUIEvent::RequestLoginStart).unwrap();
+            }
+        }
+    }
+
+    pub fn run_thread(&mut self, id: CliWidgetId, run_fn: fn()) {
+        if let None = self.threads.get(&id) {
+            let thread = thread::spawn(run_fn);
+            self.threads.insert(id, thread);
+        }
+    }
+
+    fn login_command(&self) -> Result<Child, Error> {
+        // Command::new("cat")
+        //     .arg("aws_sso_mock.sh") //config
+        Command::new("aws")
+            .arg("sso")
+            .arg("login")
+            .arg("--profile")
+            .arg("myccv-lab-non-prod-myccv-lab-developer") //config
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+
+    fn get_logs_command(&self) -> Result<Child, Error> {
+        // Command::new("tail")
+        //     .arg("-f")
+        //     .arg("src/main.rs")
+        Command::new("kubectl")
+            .arg("logs")
+            .arg("-n")
+            .arg("myccv-dev-salespoint") //config
+            .arg("-l")
+            .arg("component=salespoint-v2") //config
+            .arg("-c")
+            .arg("salespoint-v2") //config
+            .arg("-f")
+            .arg("--prefix=true")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+
+    fn get_tail_command(&self) -> Result<Child, Error> {
+        Command::new("cat")
+            .arg("logs.txt")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+
+    fn update_kubeconfig_command(&self, kube_env: KubeEnvData) -> Result<Child, Error> {
+        Command::new("aws")
+            .arg("eks")
+            .arg("--profile")
+            .arg(kube_env.profile) //config
+            .arg("update-kubeconfig")
+            .arg("--name")
+            .arg(kube_env.environment) //config
+            // Command::new("cat")
+            //     .arg("aws_sso_mock.sh") //config
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+
+    fn get_pods_command(&self) -> Result<Child, Error> {
+        Command::new("kubectl")
+            .arg("get")
+            .arg("-n")
+            .arg("myccv-dev-salespoint") //config
+            .arg("pods")
+            // Command::new("cat")
+            //     .arg("aws_sso_mock.sh") //config
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }
+
+    fn update_kubeconfig(
+        &self,
+        kube_env: KubeEnvData,
+        event_tx: &Sender<TUIEvent>,
+    ) -> Result<String, String> {
+        match self.update_kubeconfig_command(kube_env) {
+            Ok(child) => self.wait_for_output_with_timeout(child, event_tx),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn get_pods(&self) -> Result<String, String> {
+        match self.get_pods_command() {
+            Ok(child) => Ok("".to_string()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn check_connectivity(&self, event_tx: &Sender<TUIEvent>) -> Result<String, String> {
+        match self.get_pods_command() {
+            Ok(child) => self.wait_for_output_with_timeout(child, event_tx),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn login(&self, child: Result<Child, Error>, event_tx: &Sender<TUIEvent>) {
+        if let Ok(mut child) = child {
+            let child_stdout = self.open_child_stdout(&mut child);
+            let child_stderr = self.open_child_stderr(&mut child);
+            let (thread_handle, read_stdout_rx, read_stderr_rx) =
+                self.open_log_channel(child_stdout, child_stderr);
+            while !thread_handle.is_finished() {
+                if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
+                    self.on_error(&error, &event_tx);
+                }
+                if let Ok(line) = read_stdout_rx.recv_timeout(Duration::from_millis(10)) {
+                    self.add_login_logs(&event_tx, &line);
+                    self.check_login_status(&line, &event_tx);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 }

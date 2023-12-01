@@ -1,10 +1,12 @@
 mod action_handler;
 mod app;
 mod structs;
+mod thread_manager;
 pub mod truncator;
 mod ui;
 mod widget_data_store;
 mod widgets;
+use action_handler::ActionHandler;
 use app::App;
 use crossterm::{
     event::{DisableMouseCapture, KeyCode},
@@ -95,9 +97,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let event_tx_clone = event_tx.clone();
 
     // action thread
-    thread::spawn(move || {
-        action_handler::start(event_tx_clone, action_rx);
-    });
+    let action_handler = ActionHandler::start(event_tx, &action_rx);
 
     // init state
     event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
