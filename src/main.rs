@@ -1,6 +1,7 @@
 mod action_handler;
 mod app;
 mod structs;
+mod aws_api;
 mod thread_manager;
 pub mod truncator;
 mod ui;
@@ -35,7 +36,6 @@ use std::{
         mpsc::{self, Receiver, Sender},
         Once,
     },
-    thread,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let tail_widget_data = create_tail_widget_data();
 
     // store
-    let mut store = Store::new(
+    let store = Store::new(
         header_widget_data.get_widget(),
         login_widget_data.get_widget(),
         logs_widget_data.get_widget(),
@@ -69,35 +69,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // truncator
-    let truncator = Box::new(TopTruncator::new(50));
-
-    // clone to move in to action thread
-    let action_tx_clone = action_tx.clone();
+    let truncator = TopTruncator::new(50);
 
     // widget data store
-    thread::spawn(move || {
-        let mut widget_data_store = WidgetDataStore::new(
-            event_rx,
-            &mut store,
-            store_tx.clone(),
-            action_tx_clone,
-            truncator,
-        );
-
-        let widget_event_handlers = vec![
-            login_widget_data.get_event_handler(),
-            logs_widget_data.get_event_handler(),
-            pods_widget_data.get_event_handler(),
-            tail_widget_data.get_event_handler(),
-        ];
-        widget_data_store.start(widget_event_handlers)
-    });
-
-    // clone to move in to action thread
-    let event_tx_clone = event_tx.clone();
+    let widget_event_handlers = vec![
+        login_widget_data.get_event_handler(),
+        logs_widget_data.get_event_handler(),
+        pods_widget_data.get_event_handler(),
+        tail_widget_data.get_event_handler(),
+    ];
+    WidgetDataStore::run(
+        event_rx,
+        store,
+        store_tx,
+        action_tx.clone(),
+        truncator,
+        widget_event_handlers,
+    );
 
     // action thread
-    let action_handler = ActionHandler::start(event_tx, &action_rx);
+    ActionHandler::run(&event_tx, action_rx);
 
     // init state
     event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
