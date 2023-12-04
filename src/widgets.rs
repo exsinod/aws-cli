@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::mpsc::Sender};
 use crossterm::event::KeyCode;
 use log::trace;
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::Span,
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -23,7 +23,7 @@ pub enum CliWidgetId {
     GetLogs,
     GetLoginLogs,
     GetPods,
-    Tail,
+    RequestLogin,
     LoginRequest,
 }
 
@@ -31,6 +31,14 @@ pub trait RenderWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI);
     fn get_widget(&self) -> &CliWidget;
     fn get_widget_mut(&mut self) -> &mut CliWidget;
+
+    fn get_title(&self) -> Option<String> {
+        self.get_widget().title.clone()
+    }
+
+    fn set_title(&mut self, title: &str) {
+        self.get_widget_mut().title = Some(title.to_string());
+    }
 
     fn get_data(&self) -> CliWidgetData {
         self.get_widget().data.clone()
@@ -47,6 +55,12 @@ pub trait RenderWidget {
 
 #[derive(Clone, Debug, Default)]
 pub struct HeaderWidget {
+    pub widget: CliWidget,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ErrorActionWidget {
+    black: bool,
     pub widget: CliWidget,
 }
 
@@ -70,6 +84,32 @@ pub struct CliWidget {
 impl HeaderWidget {
     pub fn new(widget: CliWidget) -> Self {
         HeaderWidget { widget }
+    }
+}
+
+impl ErrorActionWidget {
+    pub fn new(black: bool, widget: CliWidget) -> Self {
+        ErrorActionWidget { black, widget }
+    }
+
+    fn centered_rect(&self, r: Rect, percent_x: u16, percent_y: u16) -> Rect {
+        let popup_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ])
+            .split(r);
+
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ])
+            .split(popup_layout[1])[1]
     }
 }
 
@@ -163,12 +203,36 @@ impl<'a> RenderWidget for HeaderWidget {
     }
 }
 
+impl<'a> RenderWidget for ErrorActionWidget {
+    fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
+        if let Some(title) = self.widget.title.clone() {
+            if let Some(Some(logs)) = self.get_data().data.get("logs") {
+                let rect = layout.get_full_rect(f);
+                f.render_widget(
+                    self.widget
+                        .content_in_black(title, logs, rect[0])
+                        .unwrap_or_default(),
+                    self.centered_rect(rect[0], 50, 30),
+                );
+            }
+        }
+    }
+
+    fn get_widget(&self) -> &CliWidget {
+        &self.widget
+    }
+
+    fn get_widget_mut(&mut self) -> &mut CliWidget {
+        &mut self.widget
+    }
+}
+
 impl<'a> RenderWidget for BodyWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         trace!("rendering widget with data {:?}", self.widget.data.clone());
         match self.widget.title.clone() {
             Some(title) => {
-                if let Some(logs) = self.get_data().data.get("logs") {
+                if let Some(Some(logs)) = self.get_data().data.get("logs") {
                     if self.full_screen {
                         let rect = layout.get_full_rect(f);
                         if self.black {
@@ -176,7 +240,7 @@ impl<'a> RenderWidget for BodyWidget {
                                 self.widget
                                     .content_in_black(
                                         title.to_string(),
-                                        logs.clone(),
+                                        logs,
                                         rect[self.widget.pos],
                                     )
                                     .unwrap_or_default(),
@@ -187,7 +251,7 @@ impl<'a> RenderWidget for BodyWidget {
                                 self.widget
                                     .content_in_white(
                                         title.to_string(),
-                                        self.widget.data.clone().data.get("logs").unwrap().clone(),
+                                        logs,
                                         rect[self.widget.pos],
                                     )
                                     .unwrap_or_default(),
@@ -201,7 +265,7 @@ impl<'a> RenderWidget for BodyWidget {
                                 self.widget
                                     .content_in_black(
                                         title.to_string(),
-                                        logs.clone(),
+                                        logs,
                                         rect[self.widget.pos],
                                     )
                                     .unwrap_or_default(),
@@ -212,7 +276,7 @@ impl<'a> RenderWidget for BodyWidget {
                                 self.widget
                                     .content_in_white(
                                         title.to_string(),
-                                        self.widget.data.clone().data.get("logs").unwrap().clone(),
+                                        logs,
                                         rect[self.widget.pos],
                                     )
                                     .unwrap_or_default(),
@@ -236,10 +300,10 @@ impl<'a> RenderWidget for BodyWidget {
 }
 
 impl<'a> CliWidget {
-    pub fn bordered(id: CliWidgetId, title: String, pos: usize, data: CliWidgetData) -> Self {
+    pub fn bordered(id: CliWidgetId, title: &str, pos: usize, data: CliWidgetData) -> Self {
         CliWidget {
             id,
-            title: Some(title),
+            title: Some(title.to_string()),
             data,
             pos,
             logged_in: false,
@@ -261,7 +325,7 @@ impl<'a> CliWidget {
     fn content_in_black(
         &self,
         title: String,
-        logs: Option<Vec<String>>,
+        logs: &Vec<String>,
         rect: Rect,
     ) -> Option<Paragraph<'a>> {
         let bg_color = Color::Black;
@@ -270,46 +334,38 @@ impl<'a> CliWidget {
             true => Color::Red,
             false => fg_color,
         };
-        if let Some(log) = logs {
-            Some(
-                Paragraph::new(log.join(""))
-                    .scroll((Self::calculate_scroll(log, rect), 50))
-                    .block(
-                        Block::new()
-                            .title(title)
-                            .borders(Borders::ALL)
-                            .style(Style::new().fg(border_color)),
-                    )
-                    .style(Style::new().fg(fg_color).bg(bg_color))
-                    .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: false }),
-            )
-        } else {
-            None
-        }
+        Some(
+            Paragraph::new(logs.join(""))
+                .scroll((Self::calculate_scroll(&logs, &rect), 50))
+                .block(
+                    Block::new()
+                        .title(title)
+                        .borders(Borders::ALL)
+                        .style(Style::new().fg(border_color)),
+                )
+                .style(Style::new().fg(fg_color).bg(bg_color))
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: false }),
+        )
     }
 
     fn content_in_white(
         &self,
         title: String,
-        logs: Option<Vec<String>>,
+        logs: &Vec<String>,
         rect: Rect,
     ) -> Option<Paragraph<'a>> {
-        if let Some(log) = logs {
-            Some(
-                Paragraph::new(log.join("\n"))
-                    .scroll((Self::calculate_scroll(log, rect), 0))
-                    .block(Block::new().title(title).borders(Borders::ALL))
-                    .style(Style::new().bg(Color::White).fg(Color::Black))
-                    .alignment(Alignment::Left)
-                    .wrap(Wrap { trim: true }),
-            )
-        } else {
-            None
-        }
+        Some(
+            Paragraph::new(logs.join("\n"))
+                .scroll((Self::calculate_scroll(&logs, &rect), 0))
+                .block(Block::new().title(title).borders(Borders::ALL))
+                .style(Style::new().bg(Color::White).fg(Color::Black))
+                .alignment(Alignment::Left)
+                .wrap(Wrap { trim: true }),
+        )
     }
 
-    fn calculate_scroll(lines: Vec<String>, estate: Rect) -> u16 {
+    fn calculate_scroll(lines: &Vec<String>, estate: &Rect) -> u16 {
         let mut scroll_to: u16 = 0;
         for line in lines {
             let new_lines = line.chars().filter(|c| c.eq(&'\n')).count();
@@ -362,7 +418,7 @@ pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
         true,
         CliWidget::bordered(
             CliWidgetId::GetLoginLogs,
-            "Logging in...".to_string(),
+            "Logging in...",
             0,
             login_widget_data,
         ),
@@ -393,12 +449,7 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     let logs_widget = BodyWidget::new(
         true,
         false,
-        CliWidget::bordered(
-            CliWidgetId::GetLogs,
-            "Salespoint Logs".to_string(),
-            0,
-            logs_widget_data,
-        ),
+        CliWidget::bordered(CliWidgetId::GetLogs, "Salespoint Logs", 0, logs_widget_data),
     );
     let logs_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddLog(log_part) => {
@@ -426,12 +477,7 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     let pods_widget = BodyWidget::new(
         true,
         false,
-        CliWidget::bordered(
-            CliWidgetId::GetPods,
-            "Salespoint pods".to_string(),
-            1,
-            pods_widget_data,
-        ),
+        CliWidget::bordered(CliWidgetId::GetPods, "Salespoint pods", 1, pods_widget_data),
     );
     let pods_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddPods(pods) => {
@@ -447,59 +493,33 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     }
 }
 
-pub fn create_tail_widget_data<'a>() -> WidgetDescription<BodyWidget> {
-    let tail_widget_data = CliWidgetData {
-        id: CliWidgetId::Tail,
-        thread_started: false,
-        initiate_thread: Some(|a| {
-            a.send(TUIAction::GetTail).unwrap();
-        }),
-        data: HashMap::default(),
-    };
-    let tail_widget = BodyWidget::new(
-        true,
-        false,
-        CliWidget::bordered(
-            CliWidgetId::Tail,
-            "cli logs".to_string(),
-            1,
-            tail_widget_data,
-        ),
-    );
-    let tail_event_handler = |event: &TUIEvent, store: &mut Store| match event {
-        TUIEvent::AddTailLog(tail_log) => {
-            add_to_widget_data(store.tail_widget.as_mut().unwrap(), tail_log.to_string());
-            None
-        }
-        _ => Some(()),
-    };
-    WidgetDescription {
-        widget: tail_widget,
-        event_handler: tail_event_handler,
-        keymap: |_, _, _| {},
-    }
-}
-
-pub fn _create_login_request_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+pub fn create_request_login_widget_data<'a>() -> WidgetDescription<ErrorActionWidget> {
     let login_request_widget_data = CliWidgetData {
-        id: CliWidgetId::Tail,
+        id: CliWidgetId::RequestLogin,
         thread_started: false,
         initiate_thread: Some(|_| {}),
         data: HashMap::default(),
     };
-    let login_request_widget = BodyWidget::new(
+    let login_request_widget = ErrorActionWidget::new(
         true,
-        false,
-        CliWidget::bordered(
-            CliWidgetId::LoginRequest,
-            "bleoboeli".to_string(),
-            1,
-            login_request_widget_data,
-        ),
+        CliWidget::bordered(CliWidgetId::LoginRequest, "", 1, login_request_widget_data),
     );
     let login_request_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::RequestLoginStart => {
             store.request_login = true;
+            store
+                .request_login_widget
+                .as_mut()
+                .unwrap()
+                .set_title("It seems I can't reach your resources...");
+            store.request_login_widget.as_mut().unwrap().set_data(
+                "logs".to_string(),
+                vec![
+                    "\nWhat do you want to do?\n\n".to_string(),
+                    "1. retry (I forgot to turn on my VPN)\n".to_string(),
+                    "2. Login to AWS".to_string(),
+                ],
+            );
             None
         }
         TUIEvent::RequestLoginStop => {

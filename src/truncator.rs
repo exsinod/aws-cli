@@ -2,7 +2,7 @@ use std::time::SystemTime;
 
 use crate::{structs::Store, widgets::RenderWidget};
 
-pub trait Truncatorix {
+pub trait Truncator {
     fn set_time(&mut self, now: SystemTime);
     fn get_time(&self) -> SystemTime;
     fn truncate(&mut self, store: &mut Store);
@@ -33,7 +33,7 @@ impl TopTruncator {
     }
 }
 
-impl Truncatorix for TopTruncator {
+impl Truncator for TopTruncator {
     fn set_time(&mut self, now: SystemTime) {
         self.now = Some(now)
     }
@@ -68,7 +68,7 @@ impl NoopTruncator {
     }
 }
 
-impl Truncatorix for NoopTruncator {
+impl Truncator for NoopTruncator {
     fn set_time(&mut self, _: SystemTime) {}
 
     fn get_time(&self) -> SystemTime {

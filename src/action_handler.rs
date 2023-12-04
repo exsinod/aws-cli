@@ -5,10 +5,9 @@ use std::{
 
 use log::debug;
 
-use crate::thread_manager::WidgetTaskId;
 use crate::{
-    structs::{KubeEnv, DEV, PROD},
     aws_api::{APIConnectivity, AwsAPI},
+    structs::{KubeEnv, DEV, PROD},
 };
 use crate::{TUIAction, TUIEvent};
 
@@ -68,39 +67,12 @@ impl<'a> ActionHandler<'a> {
                 },
                 TUIAction::LogIn => {
                     self.aws_api.login();
-                    // self.thread_manager.run_thread(Task {
-                    // id: WidgetTaskId::GetLoginLogs,
-                    // command_fn: || self.aws_api.,
-                    // success_fn: |e| {},
-                    // error_fn: |e| {}
-                    // });
                 }
                 TUIAction::GetLogs => {
                     self.aws_api.get_logs();
                 }
                 TUIAction::GetPods => {
-                    self.aws_api.run_task(
-                        WidgetTaskId::GetPods,
-                        self.aws_api.get_pods_command(),
-                        |output: String, event_tx: Sender<TUIEvent>| {
-                            event_tx.send(TUIEvent::AddPods(output)).unwrap();
-                        },
-                        |event_tx: Sender<TUIEvent>| {
-                            event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                        },
-                    );
-                }
-
-                TUIAction::GetTail => {
-                    // self.thread_manager.run_task(
-                    //     WidgetTaskId::GetPods,
-                    //     |output: String, event_tx: Sender<TUIEvent>| {
-                    //         event_tx.send(TUIEvent::AddPods(output)).unwrap();
-                    //     },
-                    //     |event_tx: Sender<TUIEvent>| {
-                    //         event_tx.send(TUIEvent::RequestLoginStart).unwrap();
-                    //     },
-                    // );
+                    self.aws_api.get_pods();
                 }
             }
         }

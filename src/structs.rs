@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::mpsc::Sender};
 
-use crate::widgets::{BodyWidget, CliWidgetId, HeaderWidget};
+use crate::widgets::{BodyWidget, CliWidgetId, ErrorActionWidget, HeaderWidget};
 
 pub const DEV: KubeEnvData =
     KubeEnvData::new("eks-non-prod-myccv-lab-developer", "shared-non-prod-2");
@@ -31,7 +31,7 @@ pub struct Store {
     pub login_widget: Option<BodyWidget>,
     pub logs_widget: Option<BodyWidget>,
     pub pods_widget: Option<BodyWidget>,
-    pub tail_widget: Option<BodyWidget>,
+    pub request_login_widget: Option<ErrorActionWidget>,
 }
 
 impl Store {
@@ -40,7 +40,7 @@ impl Store {
         login_widget: BodyWidget,
         logs_widget: BodyWidget,
         pods_widget: BodyWidget,
-        tail_widget: BodyWidget,
+        request_login_widget: ErrorActionWidget,
     ) -> Store {
         Store {
             ui_state: UIState::LoggingIn,
@@ -52,7 +52,7 @@ impl Store {
             login_widget: Some(login_widget),
             logs_widget: Some(logs_widget),
             pods_widget: Some(pods_widget),
-            tail_widget: Some(tail_widget),
+            request_login_widget: Some(request_login_widget),
         }
     }
 }
@@ -118,7 +118,6 @@ pub enum TUIAction {
     ChangeEnv(KubeEnv),
     GetLogs,
     GetPods,
-    GetTail,
 }
 
 #[derive(Debug, PartialEq)]

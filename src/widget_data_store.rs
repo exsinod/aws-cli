@@ -8,7 +8,7 @@ use log::{debug, error, trace};
 
 use crate::{
     structs::{TUIError, UIState},
-    truncator::{TopTruncator, Truncatorix},
+    truncator::Truncator,
     widgets::RenderWidget,
     Store, TUIAction, TUIEvent,
 };
@@ -18,7 +18,7 @@ pub struct WidgetDataStore<'a> {
     store: &'a mut Store,
     store_tx: &'a Sender<Store>,
     action_tx: &'a Sender<TUIAction>,
-    truncator: TopTruncator,
+    truncator: Box<dyn Truncator + Send>,
 }
 
 impl<'a> WidgetDataStore<'a> {
@@ -27,7 +27,7 @@ impl<'a> WidgetDataStore<'a> {
         mut store: Store,
         store_tx: Sender<Store>,
         action_tx: Sender<TUIAction>,
-        truncator: TopTruncator,
+        truncator: Box<dyn Truncator + Send>,
         widget_event_handlers: Vec<fn(&TUIEvent, &mut Store) -> Option<()>>,
     ) {
         let action_tx = action_tx.clone();
@@ -43,7 +43,7 @@ impl<'a> WidgetDataStore<'a> {
         store: &'a mut Store,
         store_tx: &'a Sender<Store>,
         action_tx: &'a Sender<TUIAction>,
-        truncator: TopTruncator,
+        truncator: Box<dyn Truncator + Send>,
     ) -> Self {
         WidgetDataStore {
             event_rx,
@@ -103,12 +103,6 @@ impl<'a> WidgetDataStore<'a> {
                     self.store.request_login = false;
                     action_tx_clone.send(TUIAction::CheckConnectivity).unwrap();
                 }
-                TUIEvent::RequestLoginStart => {
-                    self.store.request_login = true;
-                }
-                TUIEvent::RequestLoginStop => {
-                    self.store.request_login = false;
-                }
                 TUIEvent::NeedsLogin => {
                     self.store.ui_state = UIState::LoggingIn;
                     self.action_tx.send(TUIAction::LogIn).unwrap();
@@ -162,298 +156,303 @@ impl<'a> WidgetDataStore<'a> {
         }
     }
 }
-//
-// #[test]
-// fn test_error_events() {
-//     crate::init_logging().unwrap();
-//     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-//     let (action_tx, _): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
-//     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
-//
-//     thread::spawn(move || {
-//         let header_widget_data = crate::widgets::create_header_widget_data();
-//         let login_widget_data = crate::widgets::create_login_widget_data();
-//         let logs_widget_data = crate::widgets::create_logs_widget_data();
-//         let pods_widget_data = crate::widgets::create_pods_widget_data();
-//
-//         let mut store = Store::new(
-//             header_widget_data.get_widget().clone(),
-//             login_widget_data.get_widget().clone(),
-//             logs_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//         );
-//         let mut widget_data_store = WidgetDataStore::new(
-//             event_rx,
-//             &mut store,
-//             &store_tx,
-//             &action_tx,
-//             crate::truncator::TopTruncator::new(50),
-//         );
-//         widget_data_store.start(vec![
-//             login_widget_data.get_event_handler(),
-//             logs_widget_data.get_event_handler(),
-//             pods_widget_data.get_event_handler(),
-//         ])
-//     });
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .header_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("error")
-//                 == None,
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     event_tx.send(TUIEvent::Error(TUIError::VPN)).unwrap();
-//
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .header_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("error")
-//                 == Some(Some(vec!["Uhm... VPN on ?".to_string()])).as_ref(),
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .header_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("error")
-//                 == None,
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     event_tx
-//         .send(TUIEvent::Error(TUIError::API("this errored".to_string())))
-//         .unwrap();
-//
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .header_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("error")
-//                 == Some(Some(vec!["this errored".to_string()])).as_ref(),
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-// }
-//
-// #[test]
-// fn test_check_connectivity_event() {
-//     crate::init_logging().unwrap();
-//     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-//     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
-//     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
-//
-//     thread::spawn(move || {
-//         let header_widget_data = crate::widgets::create_header_widget_data();
-//         let login_widget_data = crate::widgets::create_login_widget_data();
-//         let logs_widget_data = crate::widgets::create_logs_widget_data();
-//         let pods_widget_data = crate::widgets::create_pods_widget_data();
-//
-//         let mut store = Store::new(
-//             header_widget_data.get_widget().clone(),
-//             login_widget_data.get_widget().clone(),
-//             logs_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//         );
-//         let mut widget_data_store = WidgetDataStore::new(
-//             event_rx,
-//             &mut store,
-//             store_tx,
-//             action_tx,
-//             Box::new(crate::truncator::NoopTruncator::new()),
-//         );
-//         widget_data_store.start(vec![
-//             login_widget_data.get_event_handler(),
-//             logs_widget_data.get_event_handler(),
-//             pods_widget_data.get_event_handler(),
-//         ])
-//     });
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             !updated_store.request_login,
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     event_tx.send(TUIEvent::CheckConnectivity).unwrap();
-//
-//     let mut actions = vec![];
-//     let check_actions = vec![TUIAction::CheckConnectivity];
-//     while actions != check_actions {
-//         if let Ok(action) = action_rx.recv_timeout(Duration::from_millis(10)) {
-//             actions.push(action);
-//         }
-//     }
-//
-//     assert!(actions == check_actions, "was {:?}", actions);
-// }
-//
-// #[test]
-// fn test_login_event() {
-//     crate::init_logging().unwrap();
-//     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-//     let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
-//     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
-//
-//     thread::spawn(move || {
-//         let header_widget_data = crate::widgets::create_header_widget_data();
-//         let login_widget_data = crate::widgets::create_login_widget_data();
-//         let logs_widget_data = crate::widgets::create_logs_widget_data();
-//         let pods_widget_data = crate::widgets::create_pods_widget_data();
-//
-//         let mut store = Store::new(
-//             header_widget_data.get_widget().clone(),
-//             login_widget_data.get_widget().clone(),
-//             logs_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//         );
-//         let mut widget_data_store = WidgetDataStore::new(
-//             event_rx,
-//             &mut store,
-//             store_tx,
-//             action_tx,
-//             Box::new(crate::truncator::NoopTruncator::new()),
-//         );
-//         widget_data_store.start(vec![
-//             login_widget_data.get_event_handler(),
-//             logs_widget_data.get_event_handler(),
-//             pods_widget_data.get_event_handler(),
-//         ])
-//     });
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(!updated_store.logged_in, "store was: {:?}", updated_store)
-//     }
-//
-//     event_tx.send(TUIEvent::NeedsLogin).unwrap();
-//
-//     let mut actions = vec![];
-//     let check_actions = vec![TUIAction::LogIn];
-//     while actions != check_actions {
-//         if let Ok(action) = action_rx.recv_timeout(Duration::from_millis(10)) {
-//             actions.push(action);
-//         }
-//     }
-//
-//     assert!(actions == check_actions, "was {:?}", actions);
-// }
-//
-// #[test]
-// fn test_add_log_event() {
-//     crate::init_logging().unwrap();
-//     let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
-//     let (action_tx, _): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
-//     let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
-//
-//     thread::spawn(move || {
-//         let header_widget_data = crate::widgets::create_header_widget_data();
-//         let login_widget_data = crate::widgets::create_login_widget_data();
-//         let logs_widget_data = crate::widgets::create_logs_widget_data();
-//         let pods_widget_data = crate::widgets::create_pods_widget_data();
-//
-//         let mut store = Store::new(
-//             header_widget_data.get_widget().clone(),
-//             login_widget_data.get_widget().clone(),
-//             logs_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//             pods_widget_data.get_widget().clone(),
-//         );
-//         let mut widget_data_store = WidgetDataStore::new(
-//             event_rx,
-//             &mut store,
-//             store_tx,
-//             action_tx,
-//             Box::new(crate::truncator::NoopTruncator::new()),
-//         );
-//         widget_data_store.start(vec![
-//             login_widget_data.get_event_handler(),
-//             logs_widget_data.get_event_handler(),
-//             pods_widget_data.get_event_handler(),
-//         ])
-//     });
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .logs_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("logs")
-//                 == None,
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     event_tx
-//         .send(TUIEvent::AddLog("this is a new line\n".to_string()))
-//         .unwrap();
-//
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .logs_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("logs")
-//                 == Some(Some(vec!["this is a new line\n".to_string()])).as_ref(),
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-//
-//     event_tx
-//         .send(TUIEvent::AddLog("and some extra.".to_string()))
-//         .unwrap();
-//
-//     if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
-//         assert!(
-//             updated_store
-//                 .clone()
-//                 .logs_widget
-//                 .unwrap()
-//                 .get_data()
-//                 .data
-//                 .get("logs")
-//                 == Some(Some(vec![
-//                     "this is a new line\n".to_string(),
-//                     "and some extra.".to_string()
-//                 ]))
-//                 .as_ref(),
-//             "store was: {:?}",
-//             updated_store
-//         )
-//     }
-// }
+
+#[test]
+fn test_error_events() {
+    crate::init_logging().unwrap();
+    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
+    let (action_tx, _): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+    let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
+
+    thread::spawn(move || {
+        let header_widget_data = crate::widgets::create_header_widget_data();
+        let login_widget_data = crate::widgets::create_login_widget_data();
+        let logs_widget_data = crate::widgets::create_logs_widget_data();
+        let pods_widget_data = crate::widgets::create_pods_widget_data();
+        let request_login_widget_data = crate::widgets::create_request_login_widget_data();
+
+        let mut store = Store::new(
+            header_widget_data.get_widget().clone(),
+            login_widget_data.get_widget().clone(),
+            logs_widget_data.get_widget().clone(),
+            pods_widget_data.get_widget().clone(),
+            request_login_widget_data.get_widget().clone(),
+        );
+        let mut widget_data_store = WidgetDataStore::new(
+            event_rx,
+            &mut store,
+            &store_tx,
+            &action_tx,
+            Box::new(crate::truncator::NoopTruncator::new()),
+        );
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
+            logs_widget_data.get_event_handler(),
+            pods_widget_data.get_event_handler(),
+            request_login_widget_data.get_event_handler(),
+        ])
+    });
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .header_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("error")
+                == None,
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    event_tx.send(TUIEvent::Error(TUIError::VPN)).unwrap();
+
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .header_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("error")
+                == Some(Some(vec!["Uhm... VPN on ?".to_string()])).as_ref(),
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .header_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("error")
+                == None,
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    event_tx
+        .send(TUIEvent::Error(TUIError::API("this errored".to_string())))
+        .unwrap();
+
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .header_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("error")
+                == Some(Some(vec!["this errored".to_string()])).as_ref(),
+            "store was: {:?}",
+            updated_store
+        )
+    }
+}
+
+#[test]
+fn test_check_connectivity_event() {
+    crate::init_logging().unwrap();
+    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
+    let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+    let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
+
+    thread::spawn(move || {
+        let header_widget_data = crate::widgets::create_header_widget_data();
+        let login_widget_data = crate::widgets::create_login_widget_data();
+        let logs_widget_data = crate::widgets::create_logs_widget_data();
+        let pods_widget_data = crate::widgets::create_pods_widget_data();
+        let request_login_widget_data = crate::widgets::create_request_login_widget_data();
+
+        let mut store = Store::new(
+            header_widget_data.get_widget().clone(),
+            login_widget_data.get_widget().clone(),
+            logs_widget_data.get_widget().clone(),
+            pods_widget_data.get_widget().clone(),
+            request_login_widget_data.get_widget().clone(),
+        );
+        let mut widget_data_store = WidgetDataStore::new(
+            event_rx,
+            &mut store,
+            &store_tx,
+            &action_tx,
+            Box::new(crate::truncator::NoopTruncator::new()),
+        );
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
+            logs_widget_data.get_event_handler(),
+            pods_widget_data.get_event_handler(),
+        ])
+    });
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            !updated_store.request_login,
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    event_tx.send(TUIEvent::CheckConnectivity).unwrap();
+
+    let mut actions = vec![];
+    let check_actions = vec![TUIAction::CheckConnectivity];
+    while actions != check_actions {
+        if let Ok(action) = action_rx.recv_timeout(Duration::from_millis(10)) {
+            actions.push(action);
+        }
+    }
+
+    assert!(actions == check_actions, "was {:?}", actions);
+}
+
+#[test]
+fn test_login_event() {
+    crate::init_logging().unwrap();
+    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
+    let (action_tx, action_rx): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+    let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
+
+    thread::spawn(move || {
+        let header_widget_data = crate::widgets::create_header_widget_data();
+        let login_widget_data = crate::widgets::create_login_widget_data();
+        let logs_widget_data = crate::widgets::create_logs_widget_data();
+        let pods_widget_data = crate::widgets::create_pods_widget_data();
+        let request_login_widget_data = crate::widgets::create_request_login_widget_data();
+
+        let mut store = Store::new(
+            header_widget_data.get_widget().clone(),
+            login_widget_data.get_widget().clone(),
+            logs_widget_data.get_widget().clone(),
+            pods_widget_data.get_widget().clone(),
+            request_login_widget_data.get_widget().clone(),
+        );
+        let mut widget_data_store = WidgetDataStore::new(
+            event_rx,
+            &mut store,
+            &store_tx,
+            &action_tx,
+            Box::new(crate::truncator::NoopTruncator::new()),
+        );
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
+            logs_widget_data.get_event_handler(),
+            pods_widget_data.get_event_handler(),
+        ])
+    });
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(!updated_store.logged_in, "store was: {:?}", updated_store)
+    }
+
+    event_tx.send(TUIEvent::NeedsLogin).unwrap();
+
+    let mut actions = vec![];
+    let check_actions = vec![TUIAction::LogIn];
+    while actions != check_actions {
+        if let Ok(action) = action_rx.recv_timeout(Duration::from_millis(10)) {
+            actions.push(action);
+        }
+    }
+
+    assert!(actions == check_actions, "was {:?}", actions);
+}
+
+#[test]
+fn test_add_log_event() {
+    crate::init_logging().unwrap();
+    let (event_tx, event_rx): (Sender<TUIEvent>, Receiver<TUIEvent>) = mpsc::channel();
+    let (action_tx, _): (Sender<TUIAction>, Receiver<TUIAction>) = mpsc::channel();
+    let (store_tx, store_rx): (Sender<Store>, Receiver<Store>) = mpsc::channel();
+
+    thread::spawn(move || {
+        let header_widget_data = crate::widgets::create_header_widget_data();
+        let login_widget_data = crate::widgets::create_login_widget_data();
+        let logs_widget_data = crate::widgets::create_logs_widget_data();
+        let pods_widget_data = crate::widgets::create_pods_widget_data();
+        let request_login_widget_data = crate::widgets::create_request_login_widget_data();
+
+        let mut store = Store::new(
+            header_widget_data.get_widget().clone(),
+            login_widget_data.get_widget().clone(),
+            logs_widget_data.get_widget().clone(),
+            pods_widget_data.get_widget().clone(),
+            request_login_widget_data.get_widget().clone(),
+        );
+        let mut widget_data_store = WidgetDataStore::new(
+            event_rx,
+            &mut store,
+            &store_tx,
+            &action_tx,
+            Box::new(crate::truncator::NoopTruncator::new()),
+        );
+        widget_data_store.start(vec![
+            login_widget_data.get_event_handler(),
+            logs_widget_data.get_event_handler(),
+            pods_widget_data.get_event_handler(),
+        ])
+    });
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .logs_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("logs")
+                == None,
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    event_tx
+        .send(TUIEvent::AddLog("this is a new line\n".to_string()))
+        .unwrap();
+
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .logs_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("logs")
+                == Some(Some(vec!["this is a new line\n".to_string()])).as_ref(),
+            "store was: {:?}",
+            updated_store
+        )
+    }
+
+    event_tx
+        .send(TUIEvent::AddLog("and some extra.".to_string()))
+        .unwrap();
+
+    if let Ok(updated_store) = store_rx.recv_timeout(Duration::from_millis(10)) {
+        assert!(
+            updated_store
+                .clone()
+                .logs_widget
+                .unwrap()
+                .get_data()
+                .data
+                .get("logs")
+                == Some(Some(vec![
+                    "this is a new line\n".to_string(),
+                    "and some extra.".to_string()
+                ]))
+                .as_ref(),
+            "store was: {:?}",
+            updated_store
+        )
+    }
+}

@@ -1,7 +1,7 @@
 mod action_handler;
 mod app;
-mod structs;
 mod aws_api;
+mod structs;
 mod thread_manager;
 pub mod truncator;
 mod ui;
@@ -26,7 +26,7 @@ use truncator::TopTruncator;
 use widget_data_store::WidgetDataStore;
 use widgets::{
     create_header_widget_data, create_login_widget_data, create_logs_widget_data,
-    create_pods_widget_data, create_tail_widget_data,
+    create_pods_widget_data, create_request_login_widget_data,
 };
 
 use std::{
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let login_widget_data = create_login_widget_data();
     let logs_widget_data = create_logs_widget_data();
     let pods_widget_data = create_pods_widget_data();
-    let tail_widget_data = create_tail_widget_data();
+    let request_login_widget_data = create_request_login_widget_data();
 
     // store
     let store = Store::new(
@@ -65,18 +65,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         login_widget_data.get_widget(),
         logs_widget_data.get_widget(),
         pods_widget_data.get_widget(),
-        tail_widget_data.get_widget(),
+        request_login_widget_data.get_widget(),
     );
 
     // truncator
-    let truncator = TopTruncator::new(50);
+    let truncator = Box::new(TopTruncator::new(50));
 
     // widget data store
     let widget_event_handlers = vec![
         login_widget_data.get_event_handler(),
         logs_widget_data.get_event_handler(),
         pods_widget_data.get_event_handler(),
-        tail_widget_data.get_event_handler(),
+        request_login_widget_data.get_event_handler(),
     ];
     WidgetDataStore::run(
         event_rx,

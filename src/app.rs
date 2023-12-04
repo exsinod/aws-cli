@@ -22,19 +22,13 @@ use crate::{
 struct ThreadManage {
     logs_thread_started: bool,
     pods_thread_started: bool,
-    tail_thread_started: bool,
 }
 
 impl ThreadManage {
-    fn new(
-        logs_thread_started: bool,
-        pods_thread_started: bool,
-        tail_thread_started: bool,
-    ) -> Self {
+    fn new(logs_thread_started: bool, pods_thread_started: bool) -> Self {
         ThreadManage {
             logs_thread_started,
             pods_thread_started,
-            tail_thread_started,
         }
     }
 }
@@ -126,7 +120,7 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 store: updated_store,
                 event_tx,
                 action_tx,
-                thread_mngt: ThreadManage::new(false, false, false),
+                thread_mngt: ThreadManage::new(false, false),
             })
         } else {
             Err("nope".to_string())
@@ -134,7 +128,6 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
     }
     fn present(&mut self) {
         let main_layout = MainLayoutUI::new();
-        let single_layout = SingleLayoutUI::new();
         let mut ui = UI::main(&main_layout);
         let mut widgets: Vec<Box<&dyn RenderWidget>> = vec![];
         widgets.push(Box::new(self.store.header_widget.as_ref().unwrap()));
@@ -145,22 +138,7 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 widgets.push(Box::new(self.store.pods_widget.as_ref().unwrap()));
                 widgets.push(Box::new(self.store.logs_widget.as_ref().unwrap()));
             } else if self.store.request_login {
-                ui = UI::single(&single_layout);
-                ui.widget_fn = Some(|f, layout| {
-                    f.render_widget(
-                        Paragraph::new(
-                            "\nWhat do you want to do?\n\n
-                                1. retry (I forgot to turn on my VPN)\n
-                                2. Login to AWS",
-                        )
-                        .block(
-                            Block::default()
-                                .borders(Borders::all())
-                                .title("It seems I can't reach your resources..."),
-                        ),
-                        Self::centered_rect(layout, 50, 30),
-                    )
-                });
+                widgets.push(Box::new(self.store.request_login_widget.as_ref().unwrap()));
             }
         } else {
         }
@@ -276,13 +254,6 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 }
                 self.thread_mngt.logs_thread_started = true;
             }
-            if !self.thread_mngt.tail_thread_started {
-                debug!("initiate tail thread");
-                if let Some(widget_data) = &self.store.tail_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
-                }
-                self.thread_mngt.tail_thread_started = true;
-            }
             if !self.thread_mngt.pods_thread_started {
                 debug!("initiate pods thread");
                 if let Some(widget_data) = &self.store.pods_widget {
@@ -291,25 +262,5 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 self.thread_mngt.pods_thread_started = true;
             }
         }
-    }
-
-    fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
-        let popup_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((100 - percent_y) / 2),
-                Constraint::Percentage(percent_y),
-                Constraint::Percentage((100 - percent_y) / 2),
-            ])
-            .split(r);
-
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage((100 - percent_x) / 2),
-                Constraint::Percentage(percent_x),
-                Constraint::Percentage((100 - percent_x) / 2),
-            ])
-            .split(popup_layout[1])[1]
     }
 }
