@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::mpsc::Sender};
+use std::{collections::HashMap, sync::mpsc::Sender, rc::Rc};
 
 use crossterm::event::KeyCode;
 use log::trace;
@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::{
     structs::{CliWidgetData, Store, TUIAction, TUIEvent},
-    ui::MainLayoutUI,
+    ui::MainLayoutUI, app::{DataStream, StreamType},
 };
 
 #[derive(Debug, Default, Clone, Hash, Eq, PartialEq)]
@@ -48,36 +48,41 @@ pub trait RenderWidget {
         self.get_widget_mut().data.data.insert(key, Some(text));
     }
 
-    fn clear_text_data(&mut self, key: String) {
-        self.get_widget_mut().data.data.insert(key, None);
+    fn clear_text_data(&mut self, key: &str) {
+        self.get_widget_mut().data.data.insert(key.to_string(), None);
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HeaderWidget {
     pub widget: CliWidget,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ErrorActionWidget {
-    black: bool,
     pub widget: CliWidget,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct BodyWidget {
-    black: bool,
     full_screen: bool,
     pub widget: CliWidget,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
+pub enum ColorScheme {
+    #[default]
+    Black,
+    White,
+}
+
+#[derive(Debug, Clone)]
 pub struct CliWidget {
     pub id: CliWidgetId,
     pub title: Option<String>,
     pub data: CliWidgetData,
     pub pos: usize,
-    pub logged_in: bool,
+    pub color_scheme: ColorScheme,
     is_selected: bool,
 }
 
@@ -88,8 +93,8 @@ impl HeaderWidget {
 }
 
 impl ErrorActionWidget {
-    pub fn new(black: bool, widget: CliWidget) -> Self {
-        ErrorActionWidget { black, widget }
+    pub fn new(widget: CliWidget) -> Self {
+        ErrorActionWidget { widget }
     }
 
     fn centered_rect(&self, r: Rect, percent_x: u16, percent_y: u16) -> Rect {
@@ -114,9 +119,8 @@ impl ErrorActionWidget {
 }
 
 impl BodyWidget {
-    pub fn new(black: bool, full_screen: bool, widget: CliWidget) -> Self {
+    pub fn new(full_screen: bool, widget: CliWidget) -> Self {
         BodyWidget {
-            black,
             full_screen,
             widget,
         }
@@ -205,17 +209,11 @@ impl<'a> RenderWidget for HeaderWidget {
 
 impl<'a> RenderWidget for ErrorActionWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
-        if let Some(title) = self.widget.title.clone() {
-            if let Some(Some(logs)) = self.get_data().data.get("logs") {
-                let rect = layout.get_full_rect(f);
-                f.render_widget(
-                    self.widget
-                        .content_in_black(title, logs, rect[0])
-                        .unwrap_or_default(),
-                    self.centered_rect(rect[0], 50, 30),
-                );
-            }
-        }
+        let rect = layout.get_full_rect(f);
+        f.render_widget(
+            self.widget.render("logs", rect[0]).unwrap_or_default(),
+            self.centered_rect(rect[0], 50, 30),
+        );
     }
 
     fn get_widget(&self) -> &CliWidget {
@@ -230,64 +228,18 @@ impl<'a> RenderWidget for ErrorActionWidget {
 impl<'a> RenderWidget for BodyWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         trace!("rendering widget with data {:?}", self.widget.data.clone());
-        match self.widget.title.clone() {
-            Some(title) => {
-                if let Some(Some(logs)) = self.get_data().data.get("logs") {
-                    if self.full_screen {
-                        let rect = layout.get_full_rect(f);
-                        if self.black {
-                            f.render_widget(
-                                self.widget
-                                    .content_in_black(
-                                        title.to_string(),
-                                        logs,
-                                        rect[self.widget.pos],
-                                    )
-                                    .unwrap_or_default(),
-                                rect[self.widget.pos],
-                            );
-                        } else {
-                            f.render_widget(
-                                self.widget
-                                    .content_in_white(
-                                        title.to_string(),
-                                        logs,
-                                        rect[self.widget.pos],
-                                    )
-                                    .unwrap_or_default(),
-                                rect[self.widget.pos],
-                            );
-                        }
-                    } else {
-                        let rect = layout.get_body_rect(f);
-                        if self.black {
-                            f.render_widget(
-                                self.widget
-                                    .content_in_black(
-                                        title.to_string(),
-                                        logs,
-                                        rect[self.widget.pos],
-                                    )
-                                    .unwrap_or_default(),
-                                rect[self.widget.pos],
-                            );
-                        } else {
-                            f.render_widget(
-                                self.widget
-                                    .content_in_white(
-                                        title.to_string(),
-                                        logs,
-                                        rect[self.widget.pos],
-                                    )
-                                    .unwrap_or_default(),
-                                rect[self.widget.pos],
-                            );
-                        }
-                    }
-                }
-            }
-            None => {}
+        let rect: Rc<[Rect]>;
+        if self.full_screen {
+            rect = layout.get_full_rect(f);
+        } else {
+            rect = layout.get_body_rect(f);
         }
+            f.render_widget(
+                self.widget
+                    .render("logs", rect[self.widget.pos])
+                    .unwrap_or_default(),
+                rect[self.widget.pos],
+            );
     }
 
     fn get_widget(&self) -> &CliWidget {
@@ -300,69 +252,68 @@ impl<'a> RenderWidget for BodyWidget {
 }
 
 impl<'a> CliWidget {
-    pub fn bordered(id: CliWidgetId, title: &str, pos: usize, data: CliWidgetData) -> Self {
+    pub fn bordered(
+        id: CliWidgetId,
+        title: &str,
+        pos: usize,
+        data: CliWidgetData,
+        color_scheme: ColorScheme,
+    ) -> Self {
         CliWidget {
             id,
             title: Some(title.to_string()),
             data,
             pos,
-            logged_in: false,
+            color_scheme,
             is_selected: false,
         }
     }
 
-    pub fn unbordered(id: CliWidgetId, data: CliWidgetData) -> Self {
+    pub fn unbordered(id: CliWidgetId, data: CliWidgetData, color_scheme: ColorScheme) -> Self {
         CliWidget {
             id,
             title: None,
             data,
             pos: 0,
-            logged_in: false,
+            color_scheme,
             is_selected: false,
         }
     }
 
-    fn content_in_black(
-        &self,
-        title: String,
-        logs: &Vec<String>,
-        rect: Rect,
-    ) -> Option<Paragraph<'a>> {
-        let bg_color = Color::Black;
-        let fg_color = Color::White;
-        let border_color = match self.is_selected {
-            true => Color::Red,
-            false => fg_color,
-        };
-        Some(
-            Paragraph::new(logs.join(""))
-                .scroll((Self::calculate_scroll(&logs, &rect), 50))
-                .block(
-                    Block::new()
-                        .title(title)
-                        .borders(Borders::ALL)
-                        .style(Style::new().fg(border_color)),
-                )
-                .style(Style::new().fg(fg_color).bg(bg_color))
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: false }),
-        )
-    }
+    fn render(&self, data_key: &str, rect: Rect) -> Option<Paragraph<'a>> {
+        if let Some(title) = &self.title {
+            if let Some(Some(logs)) = self.data.data.get(data_key) {
+                // default Black
+                let mut bg_color = Color::Black;
+                let mut fg_color = Color::White;
+                if self.color_scheme == ColorScheme::White {
+                    bg_color = Color::White;
+                    fg_color = Color::Black;
+                }
+                let border_color = match self.is_selected {
+                    true => Color::Red,
+                    false => fg_color,
+                };
 
-    fn content_in_white(
-        &self,
-        title: String,
-        logs: &Vec<String>,
-        rect: Rect,
-    ) -> Option<Paragraph<'a>> {
-        Some(
-            Paragraph::new(logs.join("\n"))
-                .scroll((Self::calculate_scroll(&logs, &rect), 0))
-                .block(Block::new().title(title).borders(Borders::ALL))
-                .style(Style::new().bg(Color::White).fg(Color::Black))
-                .alignment(Alignment::Left)
-                .wrap(Wrap { trim: true }),
-        )
+                Some(
+                    Paragraph::new(logs.join(""))
+                        .scroll((Self::calculate_scroll(&logs, &rect), 50))
+                        .block(
+                            Block::new()
+                                .title(title.to_string())
+                                .borders(Borders::ALL)
+                                .style(Style::new().fg(border_color)),
+                        )
+                        .style(Style::new().fg(fg_color).bg(bg_color))
+                        .alignment(Alignment::Left)
+                        .wrap(Wrap { trim: false }),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     fn calculate_scroll(lines: &Vec<String>, estate: &Rect) -> u16 {
@@ -397,8 +348,13 @@ fn add_to_widget_data<'a>(widget: &mut BodyWidget, text: String) -> &mut BodyWid
 }
 
 pub fn create_header_widget_data<'a>() -> WidgetDescription<HeaderWidget> {
-    let header_data = CliWidgetData::new(CliWidgetId::Header);
-    let header_widget = HeaderWidget::new(CliWidget::unbordered(CliWidgetId::Header, header_data));
+    let header_data_stream = DataStream::new(StreamType::Once, |_| {});
+    let header_data = CliWidgetData::new(CliWidgetId::Header, header_data_stream);
+    let header_widget = HeaderWidget::new(CliWidget::unbordered(
+        CliWidgetId::Header,
+        header_data,
+        ColorScheme::default(),
+    ));
     WidgetDescription {
         widget: header_widget,
         event_handler: |_, _| None,
@@ -407,20 +363,22 @@ pub fn create_header_widget_data<'a>() -> WidgetDescription<HeaderWidget> {
 }
 
 pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let login_data_stream = DataStream::new(StreamType::Once, |_| {});
     let login_widget_data = CliWidgetData {
         id: CliWidgetId::GetLoginLogs,
+        data_stream: login_data_stream,
         thread_started: false,
         initiate_thread: None,
         data: HashMap::default(),
     };
     let login_widget = BodyWidget::new(
-        false,
         true,
         CliWidget::bordered(
             CliWidgetId::GetLoginLogs,
             "Logging in...",
             0,
             login_widget_data,
+            ColorScheme::White,
         ),
     );
     let login_event_handler = |event: &TUIEvent, store: &mut Store| match event {
@@ -438,8 +396,12 @@ pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
 }
 
 pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let logs_data_stream = DataStream::new(StreamType::LeaveOpen, |action_tx| {
+            action_tx.send(TUIAction::GetLogs).unwrap();
+    });
     let logs_widget_data = CliWidgetData {
         id: CliWidgetId::GetLogs,
+        data_stream: logs_data_stream,
         thread_started: false,
         initiate_thread: Some(|a| {
             a.send(TUIAction::GetLogs).unwrap();
@@ -447,9 +409,14 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
         data: HashMap::default(),
     };
     let logs_widget = BodyWidget::new(
-        true,
         false,
-        CliWidget::bordered(CliWidgetId::GetLogs, "Salespoint Logs", 0, logs_widget_data),
+        CliWidget::bordered(
+            CliWidgetId::GetLogs,
+            "Salespoint Logs",
+            0,
+            logs_widget_data,
+            ColorScheme::default(),
+        ),
     );
     let logs_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddLog(log_part) => {
@@ -466,8 +433,12 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
 }
 
 pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
+    let pods_data_stream = DataStream::new(StreamType::Periodical, |action_tx| {
+            action_tx.send(TUIAction::GetPods).unwrap();
+    });
     let pods_widget_data = CliWidgetData {
         id: CliWidgetId::GetPods,
+        data_stream: pods_data_stream,
         thread_started: false,
         initiate_thread: Some(|a| {
             a.send(TUIAction::GetPods).unwrap();
@@ -475,13 +446,20 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
         data: HashMap::default(),
     };
     let pods_widget = BodyWidget::new(
-        true,
         false,
-        CliWidget::bordered(CliWidgetId::GetPods, "Salespoint pods", 1, pods_widget_data),
+        CliWidget::bordered(
+            CliWidgetId::GetPods,
+            "Salespoint pods",
+            1,
+            pods_widget_data,
+            ColorScheme::default(),
+        ),
     );
     let pods_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddPods(pods) => {
-            add_to_widget_data(store.pods_widget.as_mut().unwrap(), pods.to_string());
+            let widget = store.pods_widget.as_mut().unwrap();
+            widget.clear_text_data("logs");
+            widget.set_data("logs".to_string(), vec![pods.to_string()]);
             None
         }
         _ => Some(()),
@@ -494,16 +472,21 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
 }
 
 pub fn create_request_login_widget_data<'a>() -> WidgetDescription<ErrorActionWidget> {
+    let request_login_data_stream = DataStream::new(StreamType::Once, |_| {});
     let login_request_widget_data = CliWidgetData {
         id: CliWidgetId::RequestLogin,
+        data_stream: request_login_data_stream,
         thread_started: false,
         initiate_thread: Some(|_| {}),
         data: HashMap::default(),
     };
-    let login_request_widget = ErrorActionWidget::new(
-        true,
-        CliWidget::bordered(CliWidgetId::LoginRequest, "", 1, login_request_widget_data),
-    );
+    let login_request_widget = ErrorActionWidget::new(CliWidget::bordered(
+        CliWidgetId::LoginRequest,
+        "",
+        1,
+        login_request_widget_data,
+        ColorScheme::default(),
+    ));
     let login_request_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::RequestLoginStart => {
             store.request_login = true;

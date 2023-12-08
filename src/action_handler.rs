@@ -7,7 +7,7 @@ use log::debug;
 
 use crate::{
     aws_api::{APIConnectivity, AwsAPI},
-    structs::{KubeEnv, DEV, PROD},
+    structs::{KubeEnv, DEV, PROD, TEST},
 };
 use crate::{TUIAction, TUIEvent};
 
@@ -37,15 +37,18 @@ impl<'a> ActionHandler<'a> {
                 TUIAction::ChangeEnv(env) => {
                     let env_data = match env {
                         KubeEnv::Dev => DEV,
+                        KubeEnv::Test => TEST,
                         KubeEnv::Prod => PROD,
                     };
                     match self.aws_api.check_connectivity() {
-                        Ok(_) => match self.aws_api.update_config(env_data) {
+                        Ok(_) => match self.aws_api.update_config(&env_data) {
                             Ok(_) => {
+                                self.aws_api.set_kube_env(&env_data);
                                 self.event_tx.send(TUIEvent::IsConnected).unwrap();
                                 self.event_tx.send(TUIEvent::ClearError).unwrap();
                             }
-                            Err(_) => {
+                            Err(error) => {
+                                debug!("error: {:?}", error);
                                 self.event_tx.send(TUIEvent::RequestLoginStart).unwrap();
                             }
                         },

@@ -12,23 +12,17 @@ use log::{debug, trace};
 use regex::Regex;
 
 pub use crate::structs::{KubeEnvData, TUIAction};
-use crate::structs::{TUIError, TUIEvent};
+use crate::structs::{TUIError, TUIEvent, DEV};
 use crate::thread_manager::{ThreadManager, WidgetTaskId};
 
-pub trait APIConnectivity {
+pub trait APIConnectivity<'a> {
     fn check_connectivity_command(&self) -> Result<Child, Error>;
-    fn update_config_command(&self, kube_env: KubeEnvData) -> Result<Child, Error>;
+    fn update_config_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error>;
+    fn update_config(&mut self, kube_env: &KubeEnvData<'a>) -> Result<String, String>;
     fn handle_output(&self, child: Child) -> Result<String, String>;
 
     fn check_connectivity(&self) -> Result<String, String> {
         match self.check_connectivity_command() {
-            Ok(child) => self.handle_output(child),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn update_config(&self, kube_env: KubeEnvData) -> Result<String, String> {
-        match self.update_config_command(kube_env) {
             Ok(child) => self.handle_output(child),
             Err(error) => Err(error.to_string()),
         }
@@ -108,9 +102,9 @@ pub trait IOEventSender<E> {
 }
 
 pub trait AwsApiCommands {
-    fn login_command(&self) -> Result<Child, Error>;
-    fn get_logs_command(&self) -> Result<Child, Error>;
-    fn get_pods_command(&self) -> Result<Child, Error>;
+    fn login_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error>;
+    fn get_logs_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error>;
+    fn get_pods_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error>;
 }
 
 pub struct AwsApiCommandsProvider {}
@@ -120,22 +114,22 @@ impl AwsApiCommandsProvider {
     }
 }
 impl AwsApiCommands for AwsApiCommandsProvider {
-    fn login_command(&self) -> Result<Child, Error> {
+    fn login_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error> {
         Command::new("aws")
             .arg("sso")
             .arg("login")
             .arg("--profile")
-            .arg("myccv-lab-non-prod-myccv-lab-developer") //config
+            .arg(kube_env.aws_profile) //config
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
     }
 
-    fn get_logs_command(&self) -> Result<Child, Error> {
+    fn get_logs_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error> {
         Command::new("kubectl")
             .arg("logs")
             .arg("-n")
-            .arg("myccv-dev-salespoint") //config
+            .arg(kube_env.namespace) //config
             .arg("-l")
             .arg("component=salespoint-v2") //config
             .arg("-c")
@@ -147,11 +141,12 @@ impl AwsApiCommands for AwsApiCommandsProvider {
             .spawn()
     }
 
-    fn get_pods_command(&self) -> Result<Child, Error> {
+    fn get_pods_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error> {
+        debug!("getting from {:?}", kube_env);
         Command::new("kubectl")
             .arg("get")
             .arg("-n")
-            .arg("myccv-dev-salespoint") //config
+            .arg(kube_env.namespace) //config
             .arg("pods")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -204,29 +199,28 @@ impl AwsAPIHandler {
 }
 
 pub struct AwsAPI<'a> {
+    kube_env: KubeEnvData<'a>,
     commands_provider: Box<dyn AwsApiCommands + Send>,
     handler: AwsAPIHandler,
     thread_manager: ThreadManager<'a>,
     event_tx: &'a Sender<TUIEvent>,
 }
 
-impl IOEventSender<TUIEvent> for AwsAPI<'_> {
+impl<'a> IOEventSender<TUIEvent> for AwsAPI<'a> {
     fn event_tx(&self) -> &Sender<TUIEvent> {
         self.event_tx
     }
 }
 
-impl APIConnectivity for AwsAPI<'_> {
-    fn update_config_command(&self, kube_env: KubeEnvData) -> Result<Child, Error> {
+impl<'a> APIConnectivity<'a> for AwsAPI<'a> {
+    fn update_config_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error> {
         Command::new("aws")
             .arg("eks")
             .arg("--profile")
-            .arg(kube_env.profile) //config
+            .arg(kube_env.eks_profile) //config
             .arg("update-kubeconfig")
             .arg("--name")
             .arg(kube_env.environment) //config
-            // Command::new("cat")
-            //     .arg("aws_sso_mock.sh") //config
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -236,13 +230,23 @@ impl APIConnectivity for AwsAPI<'_> {
         Command::new("kubectl")
             .arg("get")
             .arg("-n")
-            .arg("myccv-dev-salespoint") //config
+            .arg(self.kube_env.namespace) //config
             .arg("pods")
-            // Command::new("cat")
-            //     .arg("aws_sso_mock.sh") //config
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
+    }
+
+
+    fn update_config(&mut self, kube_env: &KubeEnvData<'a>) -> Result<String, String> {
+        match self.update_config_command(kube_env) {
+            Ok(child) => {
+                self.thread_manager.stop_threads();
+                let result = self.handle_output(child);
+                result
+            },
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn handle_output(&self, child: Child) -> Result<String, String> {
@@ -253,6 +257,7 @@ impl APIConnectivity for AwsAPI<'_> {
 impl<'a> AwsAPI<'a> {
     pub fn new(event_tx: &'a Sender<TUIEvent>) -> Self {
         AwsAPI {
+            kube_env: DEV,
             commands_provider: Box::new(AwsApiCommandsProvider::new()),
             handler: AwsAPIHandler {
                 event_tx: event_tx.clone(),
@@ -266,8 +271,12 @@ impl<'a> AwsAPI<'a> {
         self.commands_provider = commands_provider
     }
 
+    pub fn set_kube_env(&mut self, kube_env: &KubeEnvData<'a>) {
+        self.kube_env = kube_env.clone();
+    }
+
     pub fn login(&mut self) {
-        if let Ok(child) = self.commands_provider.login_command() {
+        if let Ok(child) = self.commands_provider.login_command(&self.kube_env) {
             self.thread_manager.run_thread_timeout(
                 WidgetTaskId::GetLoginLogs,
                 child,
@@ -277,13 +286,12 @@ impl<'a> AwsAPI<'a> {
                 },
                 |error, handler| handler.on_error(error),
                 self.handler.clone(),
-                |_| false,
             );
         }
     }
 
     pub fn get_logs(&mut self) {
-        return if let Ok(child) = self.commands_provider.get_logs_command() {
+        return if let Ok(child) = self.commands_provider.get_logs_command(&self.kube_env) {
             self.thread_manager.run_thread_timeout(
                 WidgetTaskId::GetLogs,
                 child,
@@ -292,13 +300,12 @@ impl<'a> AwsAPI<'a> {
                 },
                 |error, handler| handler.on_error(error),
                 self.handler.clone(),
-                |_| false,
             );
         };
     }
 
     pub fn get_pods(&self) {
-        if let Ok(child) = self.commands_provider.get_pods_command() {
+        if let Ok(child) = self.commands_provider.get_pods_command(&self.kube_env) {
             match self.wait_for_output_with_timeout(child, |_| {}) {
                 Ok(output) => {
                     self.handler.add_pods(&output);
@@ -316,7 +323,7 @@ struct TestAwsApiCommandProvider {
     _event_tx: Sender<TUIEvent>,
 }
 impl AwsApiCommands for TestAwsApiCommandProvider {
-    fn login_command(&self) -> Result<Child, Error> {
+    fn login_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         Command::new("sh")
             .arg("-C")
             .arg("test_res/test_login_succeed.sh") //config
@@ -325,7 +332,7 @@ impl AwsApiCommands for TestAwsApiCommandProvider {
             .spawn()
     }
 
-    fn get_logs_command(&self) -> Result<Child, Error> {
+    fn get_logs_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         Command::new("tail")
             .arg("-f") //config
             .arg("test_res/get_logs.txt") //config
@@ -334,7 +341,7 @@ impl AwsApiCommands for TestAwsApiCommandProvider {
             .spawn()
     }
 
-    fn get_pods_command(&self) -> Result<Child, Error> {
+    fn get_pods_command(&self, kube_env: &KubeEnvData) -> Result<Child, Error> {
         todo!()
     }
 }
@@ -348,10 +355,9 @@ impl TestAwsApiCommandProvider {
 }
 
 struct TestAwsApiCommandFailProvider {
-    event_tx: Sender<TUIEvent>,
 }
 impl AwsApiCommands for TestAwsApiCommandFailProvider {
-    fn login_command(&self) -> Result<Child, Error> {
+    fn login_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         Command::new("sh")
             .arg("-C")
             .arg("test_res/test_login_fail.sh") //config
@@ -360,7 +366,7 @@ impl AwsApiCommands for TestAwsApiCommandFailProvider {
             .spawn()
     }
 
-    fn get_logs_command(&self) -> Result<Child, Error> {
+    fn get_logs_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         Command::new("sh")
             .arg("-C") //config
             .arg("test_res/long_living_process_quits_unexpectedly.sh") //config
@@ -369,14 +375,14 @@ impl AwsApiCommands for TestAwsApiCommandFailProvider {
             .spawn()
     }
 
-    fn get_pods_command(&self) -> Result<Child, Error> {
+    fn get_pods_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         todo!()
     }
 }
 
 impl TestAwsApiCommandFailProvider {
-    pub fn new(event_tx: Sender<TUIEvent>) -> Self {
-        TestAwsApiCommandFailProvider { event_tx }
+    pub fn new(_: Sender<TUIEvent>) -> Self {
+        TestAwsApiCommandFailProvider { }
     }
 }
 

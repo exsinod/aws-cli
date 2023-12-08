@@ -1,7 +1,7 @@
 use std::{
     io::{self},
     sync::mpsc::{Receiver, Sender},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use crossterm::event::{self, Event, KeyCode};
@@ -70,7 +70,7 @@ impl<'a, B: Backend> App<'a, B> {
         )
         .unwrap();
         while self.is_running {
-            store_presenter.initiate_threads();
+            store_presenter.update_data_streams();
             if let Some(input) = store_presenter.handle_user_input() {
                 match input {
                     UserInput::Quit => {
@@ -101,6 +101,7 @@ where
     event_tx: &'a Sender<TUIEvent>,
     action_tx: &'a Sender<TUIAction>,
     store: Store,
+    now: SystemTime,
     thread_mngt: ThreadManage,
 }
 
@@ -120,6 +121,7 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 store: updated_store,
                 event_tx,
                 action_tx,
+                now: SystemTime::now(),
                 thread_mngt: ThreadManage::new(false, false),
             })
         } else {
@@ -145,6 +147,7 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
         ui.add_to_widgets(widgets);
         self.terminal.draw(|f| ui.ui(f)).unwrap();
     }
+
     fn handle_user_input(&self) -> Option<UserInput> {
         let mut user_input: Option<UserInput> = None;
         if let Ok(true) = event::poll(Duration::from_millis(10)) {
@@ -159,6 +162,11 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                                         .unwrap();
                                 }
                                 KeyCode::Char('2') => {
+                                    self.event_tx
+                                        .send(TUIEvent::EnvChange(KubeEnv::Test))
+                                        .unwrap();
+                                }
+                                KeyCode::Char('3') => {
                                     self.event_tx
                                         .send(TUIEvent::EnvChange(KubeEnv::Prod))
                                         .unwrap();
@@ -239,14 +247,28 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
             None
         };
     }
+
     fn update_store(&mut self) {
-        if let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(20)) {
+        if let Ok(updated_store) = self.store_rx.recv_timeout(Duration::from_millis(200)) {
             self.store = updated_store
         }
     }
 
-    fn initiate_threads(&mut self) {
+    fn update_data_streams(&mut self) {
+        let data_streams: Vec<DataStream> = vec![];
         if self.store.logged_in {
+            if self.now.elapsed().unwrap().as_millis() % 50 == 0 {
+                debug!("trigger periodical");
+                (self.store.pods_widget.as_ref().unwrap().get_data().data_stream.init_action)(self.action_tx)
+            }
+            if !self
+                .store
+                .logs_widget
+                .as_ref()
+                .unwrap()
+                .get_data()
+                .thread_started
+            {}
             if !self.thread_mngt.logs_thread_started {
                 debug!("initiate logs thread");
                 if let Some(widget_data) = &self.store.logs_widget {
@@ -254,13 +276,32 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
                 }
                 self.thread_mngt.logs_thread_started = true;
             }
-            if !self.thread_mngt.pods_thread_started {
-                debug!("initiate pods thread");
-                if let Some(widget_data) = &self.store.pods_widget {
-                    widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
-                }
-                self.thread_mngt.pods_thread_started = true;
-            }
+            // if !self.thread_mngt.pods_thread_started {
+            //     debug!("initiate pods thread");
+            //     if let Some(widget_data) = &self.store.pods_widget {
+            //         widget_data.get_data().initiate_thread.unwrap()(self.action_tx);
+            //     }
+            //     self.thread_mngt.pods_thread_started = true;
+            // }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum StreamType {
+    Once,
+    Periodical,
+    LeaveOpen,
+}
+
+#[derive(Debug, Clone)]
+pub struct DataStream {
+    stream_type: StreamType,
+    init_action: fn(&Sender<TUIAction>),
+}
+
+impl DataStream {
+    pub fn new(stream_type: StreamType, init_action: fn(&Sender<TUIAction>)) -> Self {
+        DataStream { stream_type, init_action }
     }
 }

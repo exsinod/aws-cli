@@ -59,6 +59,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pods_widget_data = create_pods_widget_data();
     let request_login_widget_data = create_request_login_widget_data();
 
+    // first commit your changes, and then make widgetdata Arc<Mutex<>>
+    //
     // store
     let store = Store::new(
         header_widget_data.get_widget(),
@@ -91,7 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ActionHandler::run(&event_tx, action_rx);
 
     // init state
-    event_tx.send(TUIEvent::EnvChange(KubeEnv::Dev)).unwrap();
+    event_tx.send(TUIEvent::EnvChange(KubeEnv::Test)).unwrap();
 
     // package the extended keymaps in a Vec
     let mut extended_keymap: Vec<fn(KeyCode, &Store, &Sender<TUIEvent>)> = vec![];

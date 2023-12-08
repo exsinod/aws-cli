@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::HashMap,
     io::BufReader,
@@ -22,6 +23,7 @@ pub enum WidgetTaskId {
 }
 
 pub struct ThreadManager<'a> {
+    test: HashMap<WidgetTaskId, Arc<Mutex<bool>>>,
     event_tx: &'a Sender<TUIEvent>,
     threads: HashMap<WidgetTaskId, JoinHandle<()>>,
 }
@@ -35,8 +37,16 @@ impl<'a> IOEventSender<TUIEvent> for ThreadManager<'a> {
 impl<'a> ThreadManager<'a> {
     pub fn new(event_tx: &'a Sender<TUIEvent>) -> Self {
         ThreadManager {
+            test: HashMap::default(),
             event_tx,
             threads: HashMap::default(),
+        }
+    }
+
+    pub fn stop_threads(&mut self) {
+        for a in self.test.values_mut() {
+            debug!("setting to {:?}", a);
+            *a.lock().unwrap() = true;
         }
     }
 
@@ -49,13 +59,16 @@ impl<'a> ThreadManager<'a> {
         aws_api_handler: AwsAPIHandler,
     ) {
         if let None = self.threads.get(&id) {
+            let stop_thread = Arc::new(Mutex::new(false));
             let id_to_insert = id.clone();
+            self.test.insert(id, Arc::clone(&stop_thread));
             let child_stdout = self.open_child_stdout(&mut child);
             let child_stderr = self.open_child_stderr(&mut child);
             let (thread_handle, read_stdout_rx, read_stderr_rx) =
                 self.open_log_channel(child_stdout, child_stderr);
             let join_handle = thread::spawn(move || {
-                while !thread_handle.is_finished() {
+                while !thread_handle.is_finished() || *stop_thread.lock().unwrap() {
+                debug!("stop thread is {:?}", *stop_thread);
                     if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
                         error_fn(&error, &aws_api_handler)
                         // aws_ap.on_error(&error);
@@ -68,7 +81,7 @@ impl<'a> ThreadManager<'a> {
                     thread::sleep(Duration::from_millis(10));
                 }
             });
-            self.threads.insert(id_to_insert, join_handle);
+            self.threads.insert(id_to_insert.clone(), join_handle);
         } else {
             debug!("ignoring, thread {:?} already running", id);
         }
@@ -81,21 +94,18 @@ impl<'a> ThreadManager<'a> {
         success_fn: fn(&str, &AwsAPIHandler),
         error_fn: fn(&str, &AwsAPIHandler),
         aws_api_handler: AwsAPIHandler,
-        _timeout_fn: fn(Instant) -> bool,
     ) {
         if let None = self.threads.get(&id) {
+            let stop_thread = Arc::new(Mutex::new(false));
             let id_to_insert = id.clone();
+            self.test.insert(id, stop_thread.clone());
             let child_stdout = self.open_child_stdout(&mut child);
             let child_stderr = self.open_child_stderr(&mut child);
             let (thread_handle, read_stdout_rx, read_stderr_rx) =
                 self.open_log_channel(child_stdout, child_stderr);
             let join_handle = thread::spawn(move || {
                 let mut has_error = false;
-                while !thread_handle.is_finished() {
-                    if false {
-                        // TODO: properly do this
-                        child.kill().unwrap();
-                    }
+                while !thread_handle.is_finished() && !*stop_thread.lock().unwrap() {
                     if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
                         error_fn(&error, &aws_api_handler);
                         has_error = true;
@@ -107,12 +117,9 @@ impl<'a> ThreadManager<'a> {
                 if !child.wait().unwrap().success() || has_error {
                     debug!("child had errors");
                     error_fn("process experienced some errors", &aws_api_handler);
-                    // Err("process experienced some errors".to_string())
                 } else {
                     debug!("child had no errors");
-                    // Ok(())
                 }
-                // Err("process quit immediately".to_string())
             });
             self.threads.insert(id_to_insert, join_handle);
         } else {

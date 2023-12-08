@@ -1,21 +1,29 @@
 use std::{collections::HashMap, sync::mpsc::Sender};
 
-use crate::widgets::{BodyWidget, CliWidgetId, ErrorActionWidget, HeaderWidget};
+use crate::{widgets::{BodyWidget, CliWidgetId, ErrorActionWidget, HeaderWidget}, app::DataStream};
 
 pub const DEV: KubeEnvData =
-    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "shared-non-prod-2");
-pub const PROD: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "shared-prod-2");
+    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-non-prod-2", "myccv-dev-salespoint");
+pub const TEST: KubeEnvData =
+    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-non-prod-2", "myccv-test-salespoint");
+pub const _DEMO: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-prod-2", "myccv-demo-salespoint");
+pub const PROD: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "myccv-lab-prod-myccv-lab-developer", "shared-prod-2", "myccv-salespoint");
 
+#[derive(Clone, Default, Debug)]
 pub struct KubeEnvData<'a> {
-    pub profile: &'a str,
+    pub eks_profile: &'a str,
+    pub aws_profile: &'a str,
     pub environment: &'a str,
+    pub namespace: &'a str,
 }
 
 impl<'a> KubeEnvData<'a> {
-    pub const fn new(profile: &'a str, environment: &'a str) -> Self {
+    pub const fn new(eks_profile: &'a str, aws_profile: &'a str, environment: &'a str, namespace: &'a str) -> Self {
         KubeEnvData {
-            profile,
+            eks_profile,
+            aws_profile,
             environment,
+            namespace,
         }
     }
 }
@@ -57,18 +65,20 @@ impl Store {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CliWidgetData {
     pub id: CliWidgetId,
+    pub data_stream: DataStream,
     pub thread_started: bool,
     pub initiate_thread: Option<fn(action_tx: &Sender<TUIAction>)>,
     pub data: HashMap<String, Option<Vec<String>>>,
 }
 
 impl CliWidgetData {
-    pub fn new(id: CliWidgetId) -> Self {
+    pub fn new(id: CliWidgetId, data_stream: DataStream) -> Self {
         CliWidgetData {
             id,
+            data_stream,
             thread_started: false,
             initiate_thread: None,
             data: HashMap::default(),
@@ -138,5 +148,6 @@ pub enum Direction2 {
 #[derive(Clone, Debug, PartialEq)]
 pub enum KubeEnv {
     Dev,
+    Test,
     Prod,
 }

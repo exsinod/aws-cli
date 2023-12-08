@@ -62,7 +62,7 @@ impl<'a> WidgetDataStore<'a> {
         self.start_truncator();
         self.send();
         while let Ok(event) = self.event_rx.recv() {
-            debug!("handling event: {:?}", event);
+            trace!("handling event: {:?}", event);
             let action_tx_clone = self.action_tx.clone();
             match event {
                 TUIEvent::RequestEnvChange => {
@@ -96,7 +96,7 @@ impl<'a> WidgetDataStore<'a> {
                 },
                 TUIEvent::ClearError => {
                     if let Some(header_widget) = self.store.header_widget.as_mut() {
-                        header_widget.clear_text_data("error".to_string());
+                        header_widget.clear_text_data("error");
                     }
                 }
                 TUIEvent::CheckConnectivity => {
@@ -111,7 +111,7 @@ impl<'a> WidgetDataStore<'a> {
                     debug!("logged in");
                     self.store.logged_in = true;
                     if let Some(login_widget) = self.store.login_widget.as_mut() {
-                        login_widget.clear_text_data("logs".to_string());
+                        login_widget.clear_text_data("logs");
                     }
                     if let Some(header_widget) = self.store.header_widget.as_mut() {
                         header_widget.set_data("logged in".to_string(), vec![true.to_string()]);
@@ -121,7 +121,7 @@ impl<'a> WidgetDataStore<'a> {
                 TUIEvent::IsConnected => {
                     self.store.logged_in = true;
                     if let Some(login_widget) = self.store.login_widget.as_mut() {
-                        login_widget.clear_text_data("logs".to_string());
+                        login_widget.clear_text_data("logs");
                     }
                     if let Some(header_widget) = self.store.header_widget.as_mut() {
                         header_widget.set_data("logged in".to_string(), vec![true.to_string()]);
