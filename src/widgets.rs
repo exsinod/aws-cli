@@ -1,7 +1,11 @@
-use std::{collections::HashMap, sync::mpsc::Sender, rc::Rc};
+use std::{
+    collections::HashMap,
+    rc::Rc,
+    sync::{mpsc::Sender, Arc, Mutex},
+};
 
 use crossterm::event::KeyCode;
-use log::trace;
+use log::{debug, trace};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -11,8 +15,9 @@ use ratatui::{
 };
 
 use crate::{
+    app::{DataStream, StreamType},
     structs::{CliWidgetData, Store, TUIAction, TUIEvent},
-    ui::MainLayoutUI, app::{DataStream, StreamType},
+    ui::MainLayoutUI,
 };
 
 #[derive(Debug, Default, Clone, Hash, Eq, PartialEq)]
@@ -29,44 +34,88 @@ pub enum CliWidgetId {
 
 pub trait RenderWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI);
-    fn get_widget(&self) -> &CliWidget;
-    fn get_widget_mut(&mut self) -> &mut CliWidget;
+    fn get_widget(&self) -> &Arc<Mutex<CliWidget>>;
+    fn get_widget_mut(&mut self) -> &mut Arc<Mutex<CliWidget>>;
 
     fn get_title(&self) -> Option<String> {
-        self.get_widget().title.clone()
+        return match self.get_widget().try_lock() {
+            Ok(ref mut widget) => {
+                debug!("yeah {:?}", widget);
+                widget.title.clone()
+            }
+            Err(error) => {
+                debug!("no {:?}", error);
+                Some("".to_string())
+            }
+        }
     }
 
     fn set_title(&mut self, title: &str) {
-        self.get_widget_mut().title = Some(title.to_string());
+        match self.get_widget_mut().try_lock() {
+            Ok(ref mut widget) => {
+                debug!("yeah {:?}", widget);
+                widget.title = Some(title.to_string());
+            }
+            Err(error) => {
+                debug!("no {:?}", error);
+            }
+        }
     }
 
     fn get_data(&self) -> CliWidgetData {
-        self.get_widget().data.clone()
+        return match self.get_widget().try_lock() {
+            Ok(ref mut widget) => {
+                debug!("yeah {:?}", widget);
+                widget.data.clone()
+            }
+            Err(error) => {
+                debug!("no {:?}", error);
+                CliWidgetData::default()
+            }
+        }
     }
 
     fn set_data(&mut self, key: String, text: Vec<String>) {
-        self.get_widget_mut().data.data.insert(key, Some(text));
+        match self.get_widget_mut().try_lock() {
+            Ok(ref mut widget) => {
+                debug!("yeah {:?}", widget);
+                widget.data.data.insert(key, Some(text));
+            }
+            Err(error) => {
+                debug!("no {:?}", error);
+            }
+        }
     }
 
     fn clear_text_data(&mut self, key: &str) {
-        self.get_widget_mut().data.data.insert(key.to_string(), None);
+        match self.get_widget_mut().try_lock() {
+            Ok(ref mut widget) => {
+                debug!("yeah {:?}", widget);
+                widget.data.data.insert(key.to_string(), None);
+            }
+            Err(error) => {
+                debug!("no {:?}", error);
+            }
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct HeaderWidget {
-    pub widget: CliWidget,
+    i think this is not possible because it is locked as long as &self
+        so best to let main own the arc mutex
+    pub widget: Arc<Mutex<CliWidget>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ErrorActionWidget {
-    pub widget: CliWidget,
+    pub widget: Arc<Mutex<CliWidget>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct BodyWidget {
     full_screen: bool,
-    pub widget: CliWidget,
+    pub widget: Arc<Mutex<CliWidget>>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -87,13 +136,13 @@ pub struct CliWidget {
 }
 
 impl HeaderWidget {
-    pub fn new(widget: CliWidget) -> Self {
+    pub fn new(widget: Arc<Mutex<CliWidget>>) -> Self {
         HeaderWidget { widget }
     }
 }
 
 impl ErrorActionWidget {
-    pub fn new(widget: CliWidget) -> Self {
+    pub fn new(widget: Arc<Mutex<CliWidget>>) -> Self {
         ErrorActionWidget { widget }
     }
 
@@ -119,7 +168,7 @@ impl ErrorActionWidget {
 }
 
 impl BodyWidget {
-    pub fn new(full_screen: bool, widget: CliWidget) -> Self {
+    pub fn new(full_screen: bool, widget: Arc<Mutex<CliWidget>>) -> Self {
         BodyWidget {
             full_screen,
             widget,
@@ -172,13 +221,13 @@ impl<'a> HeaderWidget {
 impl<'a> RenderWidget for HeaderWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         let rect = layout.get_header_rect(0, f);
-        if let Some(error) = self.widget.data.data.get("error") {
+        if let Some(error) = self.widget.lock().unwrap().data.data.get("error") {
             f.render_widget(
                 self.header_error(error.as_ref().and_then(|e| Some(e.join("\n")))),
                 rect[0],
             );
         }
-        if let Some(login_info) = self.widget.data.data.get("login_info") {
+        if let Some(login_info) = self.widget.lock().unwrap().data.data.get("login_info") {
             if let Some(Some(logged_in)) = self.get_data().data.get("logged in") {
                 f.render_widget(
                     self.header_login_info(
@@ -190,7 +239,7 @@ impl<'a> RenderWidget for HeaderWidget {
             }
         }
         let rect = layout.get_header_rect(1, f);
-        if let Some(kube_info) = self.widget.data.data.get("kube_info") {
+        if let Some(kube_info) = self.widget.lock().unwrap().data.data.get("kube_info") {
             f.render_widget(
                 self.kube_info(kube_info.as_ref().and_then(|e| Some(e.join("\n")))),
                 rect[0],
@@ -198,11 +247,11 @@ impl<'a> RenderWidget for HeaderWidget {
         }
     }
 
-    fn get_widget(&self) -> &CliWidget {
+    fn get_widget(&self) -> &Arc<Mutex<CliWidget>> {
         &self.widget
     }
 
-    fn get_widget_mut(&mut self) -> &mut CliWidget {
+    fn get_widget_mut(&mut self) -> &mut Arc<Mutex<CliWidget>> {
         &mut self.widget
     }
 }
@@ -211,42 +260,51 @@ impl<'a> RenderWidget for ErrorActionWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
         let rect = layout.get_full_rect(f);
         f.render_widget(
-            self.widget.render("logs", rect[0]).unwrap_or_default(),
+            self.widget
+                .lock()
+                .unwrap()
+                .render("logs", rect[0])
+                .unwrap_or_default(),
             self.centered_rect(rect[0], 50, 30),
         );
     }
 
-    fn get_widget(&self) -> &CliWidget {
+    fn get_widget(&self) -> &Arc<Mutex<CliWidget>> {
         &self.widget
     }
 
-    fn get_widget_mut(&mut self) -> &mut CliWidget {
+    fn get_widget_mut(&mut self) -> &mut Arc<Mutex<CliWidget>> {
         &mut self.widget
     }
 }
 
 impl<'a> RenderWidget for BodyWidget {
     fn render(&self, f: &mut Frame, layout: &MainLayoutUI) {
-        trace!("rendering widget with data {:?}", self.widget.data.clone());
+        trace!(
+            "rendering widget with data {:?}",
+            self.widget.lock().unwrap().data.clone()
+        );
         let rect: Rc<[Rect]>;
         if self.full_screen {
             rect = layout.get_full_rect(f);
         } else {
             rect = layout.get_body_rect(f);
         }
-            f.render_widget(
-                self.widget
-                    .render("logs", rect[self.widget.pos])
-                    .unwrap_or_default(),
-                rect[self.widget.pos],
-            );
+        f.render_widget(
+            self.widget
+                .lock()
+                .unwrap()
+                .render("logs", rect[self.widget.lock().unwrap().pos])
+                .unwrap_or_default(),
+            rect[self.widget.lock().unwrap().pos],
+        );
     }
 
-    fn get_widget(&self) -> &CliWidget {
+    fn get_widget(&self) -> &Arc<Mutex<CliWidget>> {
         &self.widget
     }
 
-    fn get_widget_mut(&mut self) -> &mut CliWidget {
+    fn get_widget_mut(&mut self) -> &mut Arc<Mutex<CliWidget>> {
         &mut self.widget
     }
 }
@@ -350,11 +408,11 @@ fn add_to_widget_data<'a>(widget: &mut BodyWidget, text: String) -> &mut BodyWid
 pub fn create_header_widget_data<'a>() -> WidgetDescription<HeaderWidget> {
     let header_data_stream = DataStream::new(StreamType::Once, |_| {});
     let header_data = CliWidgetData::new(CliWidgetId::Header, header_data_stream);
-    let header_widget = HeaderWidget::new(CliWidget::unbordered(
+    let header_widget = HeaderWidget::new(Arc::new(Mutex::new(CliWidget::unbordered(
         CliWidgetId::Header,
         header_data,
         ColorScheme::default(),
-    ));
+    ))));
     WidgetDescription {
         widget: header_widget,
         event_handler: |_, _| None,
@@ -373,13 +431,13 @@ pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let login_widget = BodyWidget::new(
         true,
-        CliWidget::bordered(
+        Arc::new(Mutex::new(CliWidget::bordered(
             CliWidgetId::GetLoginLogs,
             "Logging in...",
             0,
             login_widget_data,
             ColorScheme::White,
-        ),
+        ))),
     );
     let login_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddLoginLog(log_part) => {
@@ -397,7 +455,7 @@ pub fn create_login_widget_data<'a>() -> WidgetDescription<BodyWidget> {
 
 pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     let logs_data_stream = DataStream::new(StreamType::LeaveOpen, |action_tx| {
-            action_tx.send(TUIAction::GetLogs).unwrap();
+        action_tx.send(TUIAction::GetLogs).unwrap();
     });
     let logs_widget_data = CliWidgetData {
         id: CliWidgetId::GetLogs,
@@ -410,13 +468,13 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let logs_widget = BodyWidget::new(
         false,
-        CliWidget::bordered(
+        Arc::new(Mutex::new(CliWidget::bordered(
             CliWidgetId::GetLogs,
             "Salespoint Logs",
             0,
             logs_widget_data,
             ColorScheme::default(),
-        ),
+        ))),
     );
     let logs_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddLog(log_part) => {
@@ -434,7 +492,7 @@ pub fn create_logs_widget_data<'a>() -> WidgetDescription<BodyWidget> {
 
 pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     let pods_data_stream = DataStream::new(StreamType::Periodical, |action_tx| {
-            action_tx.send(TUIAction::GetPods).unwrap();
+        action_tx.send(TUIAction::GetPods).unwrap();
     });
     let pods_widget_data = CliWidgetData {
         id: CliWidgetId::GetPods,
@@ -447,13 +505,13 @@ pub fn create_pods_widget_data<'a>() -> WidgetDescription<BodyWidget> {
     };
     let pods_widget = BodyWidget::new(
         false,
-        CliWidget::bordered(
+        Arc::new(Mutex::new(CliWidget::bordered(
             CliWidgetId::GetPods,
             "Salespoint pods",
             1,
             pods_widget_data,
             ColorScheme::default(),
-        ),
+        ))),
     );
     let pods_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::AddPods(pods) => {
@@ -480,13 +538,13 @@ pub fn create_request_login_widget_data<'a>() -> WidgetDescription<ErrorActionWi
         initiate_thread: Some(|_| {}),
         data: HashMap::default(),
     };
-    let login_request_widget = ErrorActionWidget::new(CliWidget::bordered(
+    let login_request_widget = ErrorActionWidget::new(Arc::new(Mutex::new(CliWidget::bordered(
         CliWidgetId::LoginRequest,
         "",
         1,
         login_request_widget_data,
         ColorScheme::default(),
-    ));
+    ))));
     let login_request_event_handler = |event: &TUIEvent, store: &mut Store| match event {
         TUIEvent::RequestLoginStart => {
             store.request_login = true;

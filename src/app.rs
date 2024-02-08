@@ -259,7 +259,14 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
         if self.store.logged_in {
             if self.now.elapsed().unwrap().as_millis() % 50 == 0 {
                 debug!("trigger periodical");
-                (self.store.pods_widget.as_ref().unwrap().get_data().data_stream.init_action)(self.action_tx)
+                (self
+                    .store
+                    .pods_widget
+                    .as_ref()
+                    .unwrap()
+                    .get_data()
+                    .data_stream
+                    .init_action.unwrap())(self.action_tx)
             }
             if !self
                 .store
@@ -287,21 +294,24 @@ impl<'a, B: Backend> StorePresenter<'a, B> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub enum StreamType {
-    Once,
+    #[default] Once,
     Periodical,
     LeaveOpen,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct DataStream {
     stream_type: StreamType,
-    init_action: fn(&Sender<TUIAction>),
+    init_action: Option<fn(&Sender<TUIAction>)>,
 }
 
 impl DataStream {
     pub fn new(stream_type: StreamType, init_action: fn(&Sender<TUIAction>)) -> Self {
-        DataStream { stream_type, init_action }
+        DataStream {
+            stream_type,
+            init_action: Some(init_action),
+        }
     }
 }

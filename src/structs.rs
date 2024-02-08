@@ -1,13 +1,34 @@
 use std::{collections::HashMap, sync::mpsc::Sender};
 
-use crate::{widgets::{BodyWidget, CliWidgetId, ErrorActionWidget, HeaderWidget}, app::DataStream};
+use crate::{
+    app::DataStream,
+    widgets::{BodyWidget, CliWidgetId, ErrorActionWidget, HeaderWidget},
+};
 
-pub const DEV: KubeEnvData =
-    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-non-prod-2", "myccv-dev-salespoint");
-pub const TEST: KubeEnvData =
-    KubeEnvData::new("eks-non-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-non-prod-2", "myccv-test-salespoint");
-pub const _DEMO: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "myccv-lab-non-prod-myccv-lab-developer", "shared-prod-2", "myccv-demo-salespoint");
-pub const PROD: KubeEnvData = KubeEnvData::new("eks-prod-myccv-lab-developer", "myccv-lab-prod-myccv-lab-developer", "shared-prod-2", "myccv-salespoint");
+pub const DEV: KubeEnvData = KubeEnvData::new(
+    "eks-non-prod-myccv-lab-developer",
+    "myccv-lab-non-prod-myccv-lab-developer",
+    "shared-non-prod-2",
+    "myccv-dev-salespoint",
+);
+pub const TEST: KubeEnvData = KubeEnvData::new(
+    "eks-non-prod-myccv-lab-developer",
+    "myccv-lab-non-prod-myccv-lab-developer",
+    "shared-non-prod-2",
+    "myccv-test-salespoint",
+);
+pub const _DEMO: KubeEnvData = KubeEnvData::new(
+    "eks-prod-myccv-lab-developer",
+    "myccv-lab-non-prod-myccv-lab-developer",
+    "shared-prod-2",
+    "myccv-demo-salespoint",
+);
+pub const PROD: KubeEnvData = KubeEnvData::new(
+    "eks-prod-myccv-lab-developer",
+    "myccv-lab-prod-myccv-lab-developer",
+    "shared-prod-2",
+    "myccv-salespoint",
+);
 
 #[derive(Clone, Default, Debug)]
 pub struct KubeEnvData<'a> {
@@ -18,7 +39,12 @@ pub struct KubeEnvData<'a> {
 }
 
 impl<'a> KubeEnvData<'a> {
-    pub const fn new(eks_profile: &'a str, aws_profile: &'a str, environment: &'a str, namespace: &'a str) -> Self {
+    pub const fn new(
+        eks_profile: &'a str,
+        aws_profile: &'a str,
+        environment: &'a str,
+        namespace: &'a str,
+    ) -> Self {
         KubeEnvData {
             eks_profile,
             aws_profile,
@@ -65,7 +91,7 @@ impl Store {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct CliWidgetData {
     pub id: CliWidgetId,
     pub data_stream: DataStream,

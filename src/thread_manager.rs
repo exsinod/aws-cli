@@ -68,7 +68,7 @@ impl<'a> ThreadManager<'a> {
                 self.open_log_channel(child_stdout, child_stderr);
             let join_handle = thread::spawn(move || {
                 while !thread_handle.is_finished() || *stop_thread.lock().unwrap() {
-                debug!("stop thread is {:?}", *stop_thread);
+                    debug!("stop thread is {:?}", *stop_thread);
                     if let Ok(error) = read_stderr_rx.recv_timeout(Duration::from_millis(10)) {
                         error_fn(&error, &aws_api_handler)
                         // aws_ap.on_error(&error);

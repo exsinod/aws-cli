@@ -62,7 +62,7 @@ impl<'a> WidgetDataStore<'a> {
         self.start_truncator();
         self.send();
         while let Ok(event) = self.event_rx.recv() {
-            trace!("handling event: {:?}", event);
+            debug!("handling event: {:?}", event);
             let action_tx_clone = self.action_tx.clone();
             match event {
                 TUIEvent::RequestEnvChange => {

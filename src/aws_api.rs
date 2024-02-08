@@ -237,14 +237,13 @@ impl<'a> APIConnectivity<'a> for AwsAPI<'a> {
             .spawn()
     }
 
-
     fn update_config(&mut self, kube_env: &KubeEnvData<'a>) -> Result<String, String> {
         match self.update_config_command(kube_env) {
             Ok(child) => {
                 self.thread_manager.stop_threads();
                 let result = self.handle_output(child);
                 result
-            },
+            }
             Err(error) => Err(error.to_string()),
         }
     }
@@ -354,8 +353,7 @@ impl TestAwsApiCommandProvider {
     }
 }
 
-struct TestAwsApiCommandFailProvider {
-}
+struct TestAwsApiCommandFailProvider {}
 impl AwsApiCommands for TestAwsApiCommandFailProvider {
     fn login_command(&self, _: &KubeEnvData) -> Result<Child, Error> {
         Command::new("sh")
@@ -382,7 +380,7 @@ impl AwsApiCommands for TestAwsApiCommandFailProvider {
 
 impl TestAwsApiCommandFailProvider {
     pub fn new(_: Sender<TUIEvent>) -> Self {
-        TestAwsApiCommandFailProvider { }
+        TestAwsApiCommandFailProvider {}
     }
 }
 
